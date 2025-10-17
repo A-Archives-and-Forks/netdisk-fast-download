@@ -48,7 +48,7 @@
         </div>
         <!-- 项目简介移到卡片内 -->
         <div class="project-intro">
-          <div class="intro-title">NFD网盘直链解析0.1.9_b9m</div>
+          <div class="intro-title">NFD网盘直链解析0.1.9_b10</div>
           <div class="intro-desc">
             <div>支持网盘：蓝奏云、蓝奏云优享、小飞机盘、123云盘、奶牛快传、移动云空间、QQ邮箱云盘、QQ闪传等 <el-link style="color:#606cf5" href="https://github.com/qaiu/netdisk-fast-download?tab=readme-ov-file#%E7%BD%91%E7%9B%98%E6%94%AF%E6%8C%81%E6%83%85%E5%86%B5" target="_blank"> &gt;&gt; </el-link></div>
             <div>文件夹解析支持：蓝奏云、蓝奏云优享、小飞机盘、123云盘</div>
@@ -213,6 +213,12 @@
         </div>
       </el-card>
     </el-row>
+    
+    <!-- 版本号显示 -->
+    <div class="version-info">
+      <span class="version-text">内部版本: {{ buildVersion }}</span>
+    </div>
+    
     <!-- 文件解析结果区下方加分享按钮 -->
 <!--    <div v-if="parseResult.code && downloadUrl" style="margin-top: 10px; text-align: right;">-->
 <!--      <el-button type="primary" @click="copyShowFileLink">分享文件直链</el-button>-->
@@ -286,7 +292,10 @@ export default {
 
       errorDialogVisible: false,
       errorDetail: null,
-      errorButtonVisible: false
+      errorButtonVisible: false,
+      
+      // 版本信息
+      buildVersion: ''
     }
   },
   methods: {
@@ -518,6 +527,17 @@ export default {
       }
     },
 
+    // 获取版本号
+    async getBuildVersion() {
+      try {
+        const response = await axios.get('/v2/build-version')
+        this.buildVersion = response.data.data
+      } catch (error) {
+        console.error('获取版本号失败:', error)
+        this.buildVersion = 'unknown'
+      }
+    },
+
     // 新增切换目录树展示模式方法
     setDirectoryViewMode(mode) {
       this.directoryViewMode = mode
@@ -569,6 +589,9 @@ export default {
 
     // 获取初始统计信息
     this.getInfo()
+
+    // 获取版本号
+    this.getBuildVersion()
 
     // 自动读取剪切板
     if (this.autoReadClipboard) {
@@ -880,5 +903,22 @@ hr {
 
 .jv-container.jv-light .jv-item.jv-object {
   color: #888;
+}
+
+/* 版本号显示样式 */
+.version-info {
+  text-align: center;
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+
+.version-text {
+  font-size: 0.85rem;
+  color: #999;
+  font-weight: 400;
+}
+
+#app.dark-theme .version-text {
+  color: #666;
 }
 </style>
