@@ -477,4 +477,32 @@ public class ParserApi {
         ClientLinkType type = ClientLinkType.valueOf(clientType.toUpperCase());
         return clientLinks.get(type);
     }
+
+    // ========== 捐赠账号 API ==========
+
+    /**
+     * 捐赠网盘账号
+     */
+    @RouteMapping(value = "/donateAccount", method = RouteMethod.POST)
+    public Future<JsonObject> donateAccount(HttpServerRequest request, JsonObject body) {
+        String ip = request.remoteAddress().host();
+        body.put("ip", ip);
+        return dbService.saveDonatedAccount(body);
+    }
+
+    /**
+     * 获取各网盘捐赠账号数量
+     */
+    @RouteMapping(value = "/donateAccountCounts", method = RouteMethod.GET)
+    public Future<JsonObject> getDonateAccountCounts() {
+        return dbService.getDonatedAccountCounts();
+    }
+
+    /**
+     * 随机获取指定网盘类型的捐赠账号（内部使用，返回加密后的 auth 参数）
+     */
+    @RouteMapping(value = "/randomAuth", method = RouteMethod.GET)
+    public Future<JsonObject> getRandomAuth(String panType) {
+        return dbService.getRandomDonatedAccount(panType);
+    }
 }

@@ -2,7 +2,7 @@
   <div id="app" v-cloak  :class="{ 'dark-theme': isDarkMode }">
     <!-- <el-dialog
       v-model="showRiskDialog"
-      title="使用本网站您应改同意"
+      title="使用本网站您应该同意"
       width="300px"
       :close-on-click-modal="false"
       :close-on-press-escape="false"
@@ -34,6 +34,10 @@
       <a href="https://blog.qaiu.top/archives/netdisk-fast-download-bao-ta-an-zhuang-jiao-cheng" target="_blank" rel="noopener" class="feedback-link mini">
         <i class="fas fa-server feedback-icon"></i>
         部署
+      </a>
+      <a href="javascript:void(0)" class="feedback-link mini donate-link" @click="showDonateDialog = true">
+        <i class="fas fa-gift feedback-icon" style="color: #e74c3c;"></i>
+        捐赠账号
       </a>
     </div>
     <el-row :gutter="20" style="margin-left: 0; margin-right: 0;">
@@ -352,6 +356,83 @@
 <!--      </el-input>-->
 <!--    </div>-->
 
+    <!-- 捐赠账号弹窗 -->
+    <el-dialog
+        v-model="showDonateDialog"
+        title="🎁 捐赠网盘账号"
+        width="550px"
+        :close-on-click-modal="false">
+      <el-alert type="info" :closable="false" show-icon style="margin-bottom: 15px;">
+        <template #title>
+          捐赠您的网盘 Cookie/Token，解析时将从所有捐赠账号中随机选择使用，分摊请求压力。
+        </template>
+      </el-alert>
+      
+      <!-- 已捐赠账号数量统计 -->
+      <div v-if="donateAccountCounts.total > 0" style="margin-bottom: 16px;">
+        <el-divider content-position="left">当前账号池（共 {{ donateAccountCounts.total }} 个）</el-divider>
+        <el-tag 
+          v-for="(count, panType) in donateAccountCounts" 
+          :key="panType"
+          v-show="panType !== 'total'"
+          type="success"
+          style="margin-right: 6px; margin-bottom: 4px;">
+          {{ getPanDisplayName(panType) }}: {{ count }} 个
+        </el-tag>
+      </div>
+      <div v-else style="margin-bottom: 16px; text-align: center; color: #999;">
+        暂无捐赠账号，成为第一个捐赠者吧！
+      </div>
+      
+      <el-form :model="donateConfig" label-width="100px" size="default">
+        <el-form-item label="网盘类型" required>
+          <el-select v-model="donateConfig.panType" placeholder="请选择网盘类型" style="width: 100%" @change="onDonatePanTypeChange">
+            <el-option-group label="必须认证">
+              <el-option label="夸克网盘 (QK)" value="QK" />
+              <el-option label="UC网盘 (UC)" value="UC" />
+            </el-option-group>
+            <el-option-group label="大文件需认证">
+              <el-option label="小飞机网盘 (FJ)" value="FJ" />
+              <el-option label="蓝奏优享 (IZ)" value="IZ" />
+              <el-option label="123云盘 (YE)" value="YE" />
+            </el-option-group>
+          </el-select>
+        </el-form-item>
+        <el-form-item label="认证类型">
+          <el-select v-model="donateConfig.authType" placeholder="请选择认证类型" style="width: 100%">
+            <el-option 
+              v-for="opt in getDonateAuthTypes()" 
+              :key="opt.value" 
+              :label="opt.label" 
+              :value="opt.value" />
+          </el-select>
+        </el-form-item>
+        <el-form-item v-if="donateConfig.authType === 'password'" label="用户名">
+          <el-input v-model="donateConfig.username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item v-if="donateConfig.authType === 'password'" label="密码">
+          <el-input v-model="donateConfig.password" type="password" show-password placeholder="请输入密码" />
+        </el-form-item>
+        <el-form-item v-if="donateConfig.authType && donateConfig.authType !== 'password'" label="Token/Cookie">
+          <el-input 
+            v-model="donateConfig.token" 
+            type="textarea" 
+            :rows="3" 
+            placeholder="粘贴 Cookie 或 Token（从浏览器开发者工具获取）" />
+        </el-form-item>
+        <el-form-item label="备注（可选）">
+          <el-input v-model="donateConfig.remark" placeholder="如：我的夸克小号" />
+        </el-form-item>
+      </el-form>
+      
+      <template #footer>
+        <el-button @click="showDonateDialog = false">关闭</el-button>
+        <el-button type="primary" @click="submitDonateAccount" :loading="donateSubmitting">
+          <el-icon><Plus /></el-icon> 捐赠此账号
+        </el-button>
+      </template>
+    </el-dialog>
+
   </div>
 
 </template>
@@ -436,7 +517,21 @@ export default {
         ext5: ''
       },
       // 所有网盘的认证配置 { panType: config }
-      allAuthConfigs: {}
+      allAuthConfigs: {},
+      
+      // 捐赠账号相关
+      showDonateDialog: false,
+      donateSubmitting: false,
+      donateConfig: {
+        panType: '',
+        authType: 'cookie',
+        username: '',
+        password: '',
+        token: '',
+        remark: ''
+      },
+      // 捐赠账号数量统计 { panType: count, total: N }
+      donateAccountCounts: { total: 0 }
     }
   },
   computed: {
@@ -460,6 +555,7 @@ export default {
       if (url.includes('drive.uc.cn') || url.includes('fast.uc.cn')) return 'UC'
       if (url.includes('feijipan.com') || url.includes('feijihe.com') || url.includes('xiaofeiyang.com')) return 'FJ'
       if (url.includes('ilanzou.com') || url.includes('lanzouv.com')) return 'IZ'
+      if (url.includes('123pan.com') || url.includes('123684.com') || url.includes('123865.com')) return 'YE'
       return ''
     },
     
@@ -469,7 +565,8 @@ export default {
         'QK': '夸克网盘',
         'UC': 'UC网盘',
         'FJ': '小飞机网盘',
-        'IZ': '蓝奏优享'
+        'IZ': '蓝奏优享',
+        'YE': '123云盘'
       }
       return names[panType] || panType
     },
@@ -663,14 +760,36 @@ export default {
       }
     },
     
-    // 生成加密的 auth 参数（根据当前链接的网盘类型）
-    generateAuthParam() {
+    // 生成加密的 auth 参数（优先使用个人配置，否则从后端随机获取捐赠账号）
+    async generateAuthParam() {
       const panType = this.getCurrentPanType()
-      if (!panType || !this.allAuthConfigs[panType]) {
-        return ''
+      if (!panType) return ''
+      
+      let config = null
+      
+      // 优先使用个人配置
+      if (this.allAuthConfigs[panType]) {
+        config = this.allAuthConfigs[panType]
+        console.log(`[认证] 使用个人配置: ${this.getPanDisplayName(panType)}`)
+      } else {
+        // 从后端随机获取捐赠账号
+        try {
+          const response = await axios.get(`${this.baseAPI}/v2/randomAuth`, { params: { panType } })
+          // 解包 JsonResult 嵌套
+          let data = response.data
+          while (data && data.data !== undefined && data.code !== undefined) {
+            data = data.data
+          }
+          if (data && (data.token || data.username)) {
+            config = data
+            console.log(`[认证] 使用捐赠账号: ${this.getPanDisplayName(panType)}`)
+          }
+        } catch (e) {
+          console.log(`[认证] 无可用捐赠账号: ${this.getPanDisplayName(panType)}`)
+        }
       }
       
-      const config = this.allAuthConfigs[panType]
+      if (!config) return ''
       
       // 构建 JSON 对象
       const authObj = {}
@@ -710,9 +829,9 @@ export default {
     },
     
     // 更新智能直链
-    updateDirectLink() {
+    async updateDirectLink() {
       if (this.link) {
-        const authParam = this.generateAuthParam()
+        const authParam = await this.generateAuthParam()
         const authSuffix = authParam ? `&auth=${authParam}` : ''
         this.directLink = `${this.baseAPI}/parser?url=${this.link}${this.password ? `&pwd=${this.password}` : ''}${authSuffix}`
       }
@@ -766,8 +885,8 @@ export default {
       this.errorButtonVisible = false
       try {
         this.isLoading = true
-        // 添加认证参数
-        const authParam = this.generateAuthParam()
+        // 添加认证参数（异步获取）
+        const authParam = await this.generateAuthParam()
         if (authParam) {
           params.auth = authParam
         }
@@ -1086,7 +1205,7 @@ export default {
         if (this.password) params.pwd = this.password
         
         // 添加认证参数
-        const authParam = this.generateAuthParam()
+        const authParam = await this.generateAuthParam()
         if (authParam) params.auth = authParam
         
         const response = await axios.get(`${this.baseAPI}/v2/clientLinks`, { params })
@@ -1115,6 +1234,101 @@ export default {
       } finally {
         this.isLoading = false
       }
+    },
+    
+    // ========== 捐赠账号相关方法 ==========
+    
+    // 捐赠弹窗中网盘类型变更
+    onDonatePanTypeChange(panType) {
+      const types = this.getDonateAuthTypes()
+      this.donateConfig.authType = types.length > 0 ? types[0].value : 'cookie'
+      this.donateConfig.username = ''
+      this.donateConfig.password = ''
+      this.donateConfig.token = ''
+      this.donateConfig.remark = ''
+    },
+    
+    // 获取捐赠弹窗支持的认证类型
+    getDonateAuthTypes() {
+      const pt = (this.donateConfig.panType || '').toLowerCase()
+      const allTypes = {
+        cookie: { label: 'Cookie', value: 'cookie' },
+        accesstoken: { label: 'AccessToken', value: 'accesstoken' },
+        authorization: { label: 'Authorization', value: 'authorization' },
+        password: { label: '用户名密码', value: 'password' },
+        custom: { label: '自定义', value: 'custom' }
+      }
+      switch (pt) {
+        case 'qk': case 'uc': return [allTypes.cookie]
+        case 'fj': case 'iz': return [allTypes.password]
+        case 'ye': return [allTypes.password, allTypes.authorization]
+        default: return Object.values(allTypes)
+      }
+    },
+    
+    // 提交捐赠账号（调用后端 API）
+    async submitDonateAccount() {
+      if (!this.donateConfig.panType) {
+        this.$message.warning('请选择网盘类型')
+        return
+      }
+      if (!this.donateConfig.token && !this.donateConfig.username) {
+        this.$message.warning('请填写认证信息（Cookie/Token 或 用户名密码）')
+        return
+      }
+      
+      this.donateSubmitting = true
+      try {
+        const payload = {
+          panType: this.donateConfig.panType,
+          authType: this.donateConfig.authType,
+          username: this.donateConfig.username || '',
+          password: this.donateConfig.password || '',
+          token: this.donateConfig.token || '',
+          remark: this.donateConfig.remark || ''
+        }
+        await axios.post(`${this.baseAPI}/v2/donateAccount`, payload)
+        this.$message.success(`已捐赠 ${this.getPanDisplayName(this.donateConfig.panType)} 账号，感谢您的贡献！`)
+        
+        // 重置表单
+        this.donateConfig.username = ''
+        this.donateConfig.password = ''
+        this.donateConfig.token = ''
+        this.donateConfig.remark = ''
+        
+        // 刷新计数
+        await this.loadDonateAccountCounts()
+      } catch (e) {
+        console.error('捐赠账号失败:', e)
+        this.$message.error('捐赠失败，请稍后重试')
+      } finally {
+        this.donateSubmitting = false
+      }
+    },
+    
+    // 从后端加载捐赠账号数量统计
+    async loadDonateAccountCounts() {
+      try {
+        const response = await axios.get(`${this.baseAPI}/v2/donateAccountCounts`)
+        // 解包可能的 JsonResult 嵌套: { code, data: { code, data: { QK: 3, total: 4 } } }
+        let data = response.data
+        while (data && data.data !== undefined && data.code !== undefined) {
+          data = data.data
+        }
+        if (data && typeof data === 'object') {
+          // 确保有 total 字段
+          if (data.total === undefined) {
+            let total = 0
+            for (const [key, val] of Object.entries(data)) {
+              if (typeof val === 'number') total += val
+            }
+            data.total = total
+          }
+          this.donateAccountCounts = data
+        }
+      } catch (e) {
+        console.error('加载捐赠账号统计失败:', e)
+      }
     }
   },
   
@@ -1127,6 +1341,9 @@ export default {
 
     // 加载认证配置
     this.loadAuthConfig()
+
+    // 加载捐赠账号统计
+    this.loadDonateAccountCounts()
 
     // 获取初始统计信息
     this.getInfo()

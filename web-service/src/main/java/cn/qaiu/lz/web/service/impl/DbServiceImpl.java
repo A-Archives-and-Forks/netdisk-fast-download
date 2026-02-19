@@ -265,4 +265,94 @@ public class DbServiceImpl implements DbService {
 
         return promise.future();
     }
+
+    // ========== 捐赠账号相关 ==========
+
+    @Override
+    public Future<JsonObject> saveDonatedAccount(JsonObject account) {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+        Promise<JsonObject> promise = Promise.promise();
+
+        String sql = """
+            INSERT INTO donated_account 
+            (pan_type, auth_type, username, password, token, remark, ip, enabled, create_time)
+            VALUES (?, ?, ?, ?, ?, ?, ?, true, NOW())
+            """;
+
+        client.preparedQuery(sql)
+            .execute(Tuple.of(
+                account.getString("panType"),
+                account.getString("authType"),
+                account.getString("username"),
+                account.getString("password"),
+                account.getString("token"),
+                account.getString("remark"),
+                account.getString("ip")
+            ))
+            .onSuccess(res -> {
+                promise.complete(JsonResult.success("捐赠成功").toJsonObject());
+            })
+            .onFailure(e -> {
+                log.error("saveDonatedAccount failed", e);
+                promise.fail(e);
+            });
+
+        return promise.future();
+    }
+
+    @Override
+    public Future<JsonObject> getDonatedAccountCounts() {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+        Promise<JsonObject> promise = Promise.promise();
+
+        String sql = "SELECT pan_type, COUNT(*) as count FROM donated_account WHERE enabled = true GROUP BY pan_type";
+
+        client.query(sql).execute().onSuccess(rows -> {
+            JsonObject counts = new JsonObject();
+            int total = 0;
+            for (Row row : rows) {
+                String panType = row.getString("pan_type");
+                Integer count = row.getInteger("count");
+                counts.put(panType, count);
+                total += count;
+            }
+            counts.put("total", total);
+            promise.complete(JsonResult.data(counts).toJsonObject());
+        }).onFailure(e -> {
+            log.error("getDonatedAccountCounts failed", e);
+            promise.fail(e);
+        });
+
+        return promise.future();
+    }
+
+    @Override
+    public Future<JsonObject> getRandomDonatedAccount(String panType) {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+        Promise<JsonObject> promise = Promise.promise();
+
+        String sql = "SELECT * FROM donated_account WHERE pan_type = ? AND enabled = true ORDER BY RAND() LIMIT 1";
+
+        client.preparedQuery(sql)
+            .execute(Tuple.of(panType))
+            .onSuccess(rows -> {
+                if (rows.size() > 0) {
+                    Row row = rows.iterator().next();
+                    JsonObject account = new JsonObject();
+                    account.put("authType", row.getString("auth_type"));
+                    account.put("username", row.getString("username"));
+                    account.put("password", row.getString("password"));
+                    account.put("token", row.getString("token"));
+                    promise.complete(JsonResult.data(account).toJsonObject());
+                } else {
+                    promise.complete(JsonResult.data(new JsonObject()).toJsonObject());
+                }
+            })
+            .onFailure(e -> {
+                log.error("getRandomDonatedAccount failed", e);
+                promise.fail(e);
+            });
+
+        return promise.future();
+    }
 }

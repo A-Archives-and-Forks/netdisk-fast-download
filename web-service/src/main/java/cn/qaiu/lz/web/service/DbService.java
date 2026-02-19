@@ -50,4 +50,21 @@ public interface DbService extends BaseAsyncService {
      */
     Future<JsonObject> getPlaygroundParserById(Long id);
 
+    // ========== 捐赠账号相关 ==========
+
+    /**
+     * 保存捐赠账号
+     */
+    Future<JsonObject> saveDonatedAccount(JsonObject account);
+
+    /**
+     * 获取各网盘捐赠账号数量统计
+     */
+    Future<JsonObject> getDonatedAccountCounts();
+
+    /**
+     * 随机获取指定网盘类型的一个启用账号
+     */
+    Future<JsonObject> getRandomDonatedAccount(String panType);
+
 }
