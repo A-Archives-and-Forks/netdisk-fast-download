@@ -25,24 +25,24 @@ import java.util.Map;
  * 夸克网盘解析
  */
 public class QkTool extends PanBase {
-    
+
     public static final String SHARE_URL_PREFIX = "https://pan.quark.cn/s/";
-    
+
     private static final String TOKEN_URL = "https://drive-pc.quark.cn/1/clouddrive/share/sharepage/token";
     private static final String DETAIL_URL = "https://drive-pc.quark.cn/1/clouddrive/share/sharepage/detail";
     private static final String DOWNLOAD_URL = "https://drive-pc.quark.cn/1/clouddrive/file/download";
-    
+
     // Cookie 刷新 API
     private static final String FLUSH_URL = "https://drive-pc.quark.cn/1/clouddrive/auth/pc/flush";
-    
+
     private static final int BATCH_SIZE = 15; // 批量获取下载链接的批次大小
-    
+
     // 静态变量：缓存 __puus cookie 和过期时间
     private static volatile String cachedPuus = null;
     private static volatile long puusExpireTime = 0;
     // __puus 有效期，默认 55 分钟（服务器实际 1 小时过期，提前 5 分钟刷新）
     private static final long PUUS_TTL_MS = 55 * 60 * 1000L;
-    
+
     private final MultiMap header = HeaderUtils.parseHeaders("""
             User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch
             Content-Type: application/json;charset=UTF-8
@@ -63,7 +63,7 @@ public class QkTool extends PanBase {
             if (cookie != null && !cookie.isEmpty()) {
                 // 过滤出夸克网盘所需的 cookie 字段
                 cookie = CookieUtils.filterUcQuarkCookie(cookie);
-                
+
                 // 如果有缓存的 __puus 且未过期，使用缓存的值更新 cookie
                 if (cachedPuus != null && System.currentTimeMillis() < puusExpireTime) {
                     cookie = CookieUtils.updateCookieValue(cookie, "__puus", cachedPuus);
@@ -75,14 +75,14 @@ public class QkTool extends PanBase {
             }
         }
         this.client = clientDisableUA;
-        
+
         // 如果 __puus 已过期或不存在，触发异步刷新
         if (needRefreshPuus()) {
             log.debug("夸克: __puus 需要刷新，触发异步刷新");
             refreshPuusCookie();
         }
     }
-    
+
     /**
      * 判断是否需要刷新 __puus
      * @return true 表示需要刷新
@@ -107,23 +107,23 @@ public class QkTool extends PanBase {
      */
     public Future<Boolean> refreshPuusCookie() {
         Promise<Boolean> refreshPromise = Promise.promise();
-        
+
         String currentCookie = header.get(HttpHeaders.COOKIE);
         if (currentCookie == null || currentCookie.isEmpty()) {
             log.debug("夸克: 无 cookie，跳过刷新");
             refreshPromise.complete(false);
             return refreshPromise.future();
         }
-        
+
         // 检查是否包含 __pus（用于获取 __puus）
         if (!currentCookie.contains("__pus=")) {
             log.debug("夸克: cookie 中不包含 __pus，跳过刷新");
             refreshPromise.complete(false);
             return refreshPromise.future();
         }
-        
+
         log.debug("夸克: 开始刷新 __puus cookie");
-        
+
         client.getAbs(FLUSH_URL)
                 .addQueryParam("pr", "ucpro")
                 .addQueryParam("fr", "pc")
@@ -134,7 +134,7 @@ public class QkTool extends PanBase {
                     // 从响应头获取 set-cookie
                     List<String> setCookies = res.cookies();
                     String newPuus = null;
-                    
+
                     for (String cookie : setCookies) {
                         if (cookie.startsWith("__puus=")) {
                             // 提取 __puus 值（只取到分号前的部分）
@@ -143,21 +143,21 @@ public class QkTool extends PanBase {
                             break;
                         }
                     }
-                    
+
                     if (newPuus != null) {
                         // 更新 cookie：替换或添加 __puus
                         String updatedCookie = CookieUtils.updateCookieValue(currentCookie, "__puus", newPuus);
                         header.set(HttpHeaders.COOKIE, updatedCookie);
-                        
+
                         // 同步更新 auths 中的 cookie
                         if (auths != null) {
                             auths.set("cookie", updatedCookie);
                         }
-                        
+
                         // 更新静态缓存
                         cachedPuus = newPuus;
                         puusExpireTime = System.currentTimeMillis() + PUUS_TTL_MS;
-                        
+
                         log.info("夸克: __puus cookie 刷新成功，有效期至: {}ms", puusExpireTime);
                         refreshPromise.complete(true);
                     } else {
@@ -169,7 +169,7 @@ public class QkTool extends PanBase {
                     log.warn("夸克: 刷新 __puus cookie 失败: {}", t.getMessage());
                     refreshPromise.complete(false);
                 });
-        
+
         return refreshPromise.future();
     }
 
@@ -180,14 +180,14 @@ public class QkTool extends PanBase {
         if (passcode == null) {
             passcode = "";
         }
-        
+
         log.debug("开始解析夸克网盘分享，pwd_id: {}, passcode: {}", pwdId, passcode.isEmpty() ? "无" : "有");
-        
+
         // 第一步：获取分享 token
         JsonObject tokenRequest = new JsonObject()
                 .put("pwd_id", pwdId)
                 .put("passcode", passcode);
-        
+
         client.postAbs(TOKEN_URL)
                 .addQueryParam("pr", "ucpro")
                 .addQueryParam("fr", "pc")
@@ -196,20 +196,20 @@ public class QkTool extends PanBase {
                 .onSuccess(res -> {
                     log.debug("第一阶段响应: {}", res.bodyAsString());
                     JsonObject resJson = asJson(res);
-                    
+
                     if (resJson.getInteger("code") != 0) {
                         fail(TOKEN_URL + " 返回异常: " + resJson);
                         return;
                     }
-                    
+
                     String stoken = resJson.getJsonObject("data").getString("stoken");
                     if (stoken == null || stoken.isEmpty()) {
                         fail("无法获取分享 token，可能的原因：1. Cookie 已过期 2. 分享链接已失效 3. 需要提取码但未提供");
                         return;
                     }
-                    
+
                     log.debug("成功获取 stoken: {}", stoken);
-                    
+
                     // 第二步：获取文件列表
                     client.getAbs(DETAIL_URL)
                             .addQueryParam("pr", "ucpro")
@@ -229,83 +229,100 @@ public class QkTool extends PanBase {
                             .onSuccess(res2 -> {
                                 log.debug("第二阶段响应: {}", res2.bodyAsString());
                                 JsonObject resJson2 = asJson(res2);
-                                
+
                                 if (resJson2.getInteger("code") != 0) {
                                     fail(DETAIL_URL + " 返回异常: " + resJson2);
                                     return;
                                 }
-                                
+
                                 JsonArray fileList = resJson2.getJsonObject("data").getJsonArray("list");
                                 if (fileList == null || fileList.isEmpty()) {
                                     fail("未找到文件");
                                     return;
                                 }
-                                
+
                                 // 过滤出文件（排除文件夹）
                                 List<JsonObject> files = new ArrayList<>();
                                 for (int i = 0; i < fileList.size(); i++) {
                                     JsonObject item = fileList.getJsonObject(i);
                                     // 判断是否为文件：file=true 或 obj_category 不为空
-                                    if (item.getBoolean("file", false) || 
-                                        (item.getString("obj_category") != null && !item.getString("obj_category").isEmpty())) {
+                                    if (item.getBoolean("file", false) ||
+                                            (item.getString("obj_category") != null && !item.getString("obj_category").isEmpty())) {
                                         files.add(item);
                                     }
                                 }
-                                
+
                                 if (files.isEmpty()) {
                                     fail("没有可下载的文件（可能都是文件夹）");
                                     return;
                                 }
-                                
+
                                 log.debug("找到 {} 个文件", files.size());
-                                
-                                // 提取第一个文件的信息并保存到 otherParam
-                                try {
-                                    JsonObject firstFile = files.get(0);
-                                    FileInfo fileInfo = new FileInfo();
-                                    fileInfo.setFileId(firstFile.getString("fid"))
-                                            .setFileName(firstFile.getString("file_name"))
-                                            .setSize(firstFile.getLong("size", 0L))
-                                            .setSizeStr(FileSizeConverter.convertToReadableSize(firstFile.getLong("size", 0L)))
-                                            .setFileType(firstFile.getBoolean("file", true) ? "file" : "folder")
-                                            .setCreateTime(firstFile.getString("updated_at"))
-                                            .setUpdateTime(firstFile.getString("updated_at"))
-                                            .setPanType(shareLinkInfo.getType());
-                                    
-                                    // 保存到 otherParam，供 CacheServiceImpl 使用
-                                    shareLinkInfo.getOtherParam().put("fileInfo", fileInfo);
-                                    log.debug("夸克提取文件信息: {}", fileInfo.getFileName());
-                                } catch (Exception e) {
-                                    log.warn("夸克提取文件信息失败，继续解析: {}", e.getMessage());
-                                }
-                                
-                                // 提取文件ID列表
+
+                                // 构建文件映射和文件ID列表（参考 kuake.py：下载结果通过 fid 回填文件信息）
                                 List<String> fileIds = new ArrayList<>();
+                                Map<String, JsonObject> fileMap = new HashMap<>();
                                 for (JsonObject file : files) {
                                     String fid = file.getString("fid");
                                     if (fid != null && !fid.isEmpty()) {
                                         fileIds.add(fid);
+                                        fileMap.put(fid, file);
                                     }
                                 }
-                                
+
                                 if (fileIds.isEmpty()) {
                                     fail("无法提取文件ID");
                                     return;
                                 }
-                                
+
                                 // 第三步：批量获取下载链接
-                                getDownloadLinksBatch(fileIds, stoken)
+                                getDownloadLinksBatch(fileIds)
                                         .onSuccess(downloadData -> {
                                             if (downloadData.isEmpty()) {
                                                 fail("未能获取到下载链接");
                                                 return;
                                             }
 
-                                            // 获取第一个文件的下载链接
-                                            String downloadUrl = downloadData.get(0).getString("download_url");
+                                            // 按 fid 对齐下载结果和文件信息，取首个有效下载链接
+                                            String downloadUrl = null;
+                                            JsonObject matchedFile = null;
+                                            for (JsonObject item : downloadData) {
+                                                String fid = item.getString("fid");
+                                                String currentUrl = item.getString("download_url");
+                                                if (currentUrl != null && !currentUrl.isEmpty() && fid != null) {
+                                                    JsonObject fileMeta = fileMap.get(fid);
+                                                    if (fileMeta != null) {
+                                                        downloadUrl = currentUrl;
+                                                        matchedFile = fileMeta;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+
                                             if (downloadUrl == null || downloadUrl.isEmpty()) {
                                                 fail("下载链接为空");
                                                 return;
+                                            }
+
+                                            // 提取匹配文件的信息并保存到 otherParam
+                                            if (matchedFile != null) {
+                                                try {
+                                                    FileInfo fileInfo = new FileInfo();
+                                                    fileInfo.setFileId(matchedFile.getString("fid"))
+                                                            .setFileName(matchedFile.getString("file_name"))
+                                                            .setSize(matchedFile.getLong("size", 0L))
+                                                            .setSizeStr(FileSizeConverter.convertToReadableSize(matchedFile.getLong("size", 0L)))
+                                                            .setFileType(matchedFile.getBoolean("file", true) ? "file" : "folder")
+                                                            .setCreateTime(matchedFile.getString("updated_at"))
+                                                            .setUpdateTime(matchedFile.getString("updated_at"))
+                                                            .setPanType(shareLinkInfo.getType());
+
+                                                    // 保存到 otherParam，供 CacheServiceImpl 使用
+                                                    shareLinkInfo.getOtherParam().put("fileInfo", fileInfo);
+                                                    log.debug("夸克提取文件信息: {}", fileInfo.getFileName());
+                                                } catch (Exception e) {
+                                                    log.warn("夸克提取文件信息失败，继续解析: {}", e.getMessage());
+                                                }
                                             }
 
                                             // 夸克网盘需要配合下载请求头，保存下载请求头
@@ -318,28 +335,28 @@ public class QkTool extends PanBase {
                                             completeWithMeta(downloadUrl, downloadHeaders);
                                         })
                                         .onFailure(handleFail(DOWNLOAD_URL));
-                                
+
                             }).onFailure(handleFail(DETAIL_URL));
                 })
                 .onFailure(handleFail(TOKEN_URL));
-        
+
         return promise.future();
     }
-    
+
     /**
      * 批量获取下载链接（分批处理）
      */
-    private Future<List<JsonObject>> getDownloadLinksBatch(List<String> fileIds, String stoken) {
+    private Future<List<JsonObject>> getDownloadLinksBatch(List<String> fileIds) {
         List<JsonObject> allResults = new ArrayList<>();
         Promise<List<JsonObject>> promise = Promise.promise();
 
         // 同步处理每个批次
-        processBatch(fileIds, stoken, 0, allResults, promise);
+        processBatch(fileIds, 0, allResults, promise);
 
         return promise.future();
     }
 
-    private void processBatch(List<String> fileIds, String stoken, int startIndex, List<JsonObject> allResults, Promise<List<JsonObject>> promise) {
+    private void processBatch(List<String> fileIds, int startIndex, List<JsonObject> allResults, Promise<List<JsonObject>> promise) {
         if (startIndex >= fileIds.size()) {
             // 所有批次处理完成
             promise.complete(allResults);
@@ -382,7 +399,7 @@ public class QkTool extends PanBase {
                     }
 
                     // 处理下一批次
-                    processBatch(fileIds, stoken, endIndex, allResults, promise);
+                    processBatch(fileIds, endIndex, allResults, promise);
                 })
                 .onFailure(t -> promise.fail("获取下载链接失败: " + t.getMessage()));
     }
@@ -391,11 +408,11 @@ public class QkTool extends PanBase {
     @Override
     public Future<List<FileInfo>> parseFileList() {
         Promise<List<FileInfo>> promise = Promise.promise();
-        
+
         String pwdId = shareLinkInfo.getShareKey();
         String passcode = shareLinkInfo.getSharePassword();
         final String finalPasscode = (passcode == null) ? "" : passcode;
-        
+
         // 如果参数里的目录ID不为空，则直接解析目录
         String dirId = (String) shareLinkInfo.getOtherParam().get("dirId");
         if (dirId != null && !dirId.isEmpty()) {
@@ -405,12 +422,12 @@ public class QkTool extends PanBase {
                 return promise.future();
             }
         }
-        
+
         // 第一步：获取 stoken
         JsonObject tokenRequest = new JsonObject()
                 .put("pwd_id", pwdId)
                 .put("passcode", finalPasscode);
-        
+
         client.postAbs(TOKEN_URL)
                 .addQueryParam("pr", "ucpro")
                 .addQueryParam("fr", "pc")
@@ -432,7 +449,7 @@ public class QkTool extends PanBase {
                     parseDir(rootDirId, pwdId, finalPasscode, stoken, promise);
                 })
                 .onFailure(t -> promise.fail("获取 token 失败: " + t.getMessage()));
-        
+
         return promise.future();
     }
 
@@ -440,7 +457,7 @@ public class QkTool extends PanBase {
         // 第二步：获取文件列表（支持指定目录）
         // 夸克 API 使用 pdir_fid 参数指定父目录 ID，根目录为 "0"
         log.info("夸克 parseDir 开始: dirId={}, pwdId={}, stoken={}", dirId, pwdId, stoken);
-        
+
         client.getAbs(DETAIL_URL)
                 .addQueryParam("pr", "ucpro")
                 .addQueryParam("fr", "pc")
@@ -462,26 +479,26 @@ public class QkTool extends PanBase {
                         promise.fail(DETAIL_URL + " 返回异常: " + resJson);
                         return;
                     }
-                    
+
                     JsonArray fileList = resJson.getJsonObject("data").getJsonArray("list");
                     if (fileList == null || fileList.isEmpty()) {
                         log.warn("夸克 API 返回的文件列表为空，dirId: {}, response: {}", dirId, resJson.encodePrettily());
                         promise.complete(new ArrayList<>());
                         return;
                     }
-                    
+
                     log.info("夸克 API 返回文件列表，总数: {}, dirId: {}", fileList.size(), dirId);
                     List<FileInfo> result = new ArrayList<>();
                     for (int i = 0; i < fileList.size(); i++) {
                         JsonObject item = fileList.getJsonObject(i);
                         FileInfo fileInfo = new FileInfo();
-                        
+
                         // 调试：打印前3个 item 的完整结构
                         if (i < 3) {
                             log.info("夸克 API 返回的 item[{}] 结构: {}", i, item.encodePrettily());
                             log.info("夸克 API item[{}] 所有字段名: {}", i, item.fieldNames());
                         }
-                        
+
                         String fid = item.getString("fid");
                         String fileName = item.getString("file_name");
                         Boolean isFile = item.getBoolean("file", true);
@@ -490,10 +507,10 @@ public class QkTool extends PanBase {
                         String objCategory = item.getString("obj_category");
                         String shareFidToken = item.getString("share_fid_token");
                         String parentId = item.getString("parent_id");
-                        
-                        log.info("处理夸克 item[{}]: fid={}, fileName={}, parentId={}, dirId={}, isFile={}, objCategory={}", 
+
+                        log.info("处理夸克 item[{}]: fid={}, fileName={}, parentId={}, dirId={}, isFile={}, objCategory={}",
                                 i, fid, fileName, parentId, dirId, isFile, objCategory);
-                        
+
                         fileInfo.setFileId(fid)
                                 .setFileName(fileName)
                                 .setSize(fileSize)
@@ -501,7 +518,7 @@ public class QkTool extends PanBase {
                                 .setCreateTime(updatedAt)
                                 .setUpdateTime(updatedAt)
                                 .setPanType(shareLinkInfo.getType());
-                        
+
                         // 判断是否为文件：file=true 或 obj_category 不为空
                         if (isFile || (objCategory != null && !objCategory.isEmpty())) {
                             // 文件
@@ -518,7 +535,7 @@ public class QkTool extends PanBase {
                             // 设置解析URL（用于下载）
                             JsonObject paramJson = new JsonObject(extParams);
                             String param = CommonUtils.urlBase64Encode(paramJson.encode());
-                            fileInfo.setParserUrl(String.format("%s/v2/redirectUrl/%s/%s", 
+                            fileInfo.setParserUrl(String.format("%s/v2/redirectUrl/%s/%s",
                                     getDomainName(), shareLinkInfo.getType(), param));
                         } else {
                             // 文件夹
@@ -531,18 +548,18 @@ public class QkTool extends PanBase {
                                 String encodedUrl = URLEncoder.encode(shareLinkInfo.getShareUrl(), StandardCharsets.UTF_8.toString());
                                 String encodedDirId = URLEncoder.encode(fid, StandardCharsets.UTF_8.toString());
                                 String encodedStoken = URLEncoder.encode(stoken, StandardCharsets.UTF_8.toString());
-                                fileInfo.setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&stoken=%s", 
+                                fileInfo.setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&stoken=%s",
                                         getDomainName(), encodedUrl, encodedDirId, encodedStoken));
                             } catch (Exception e) {
                                 // 如果编码失败，使用原始值
-                                fileInfo.setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&stoken=%s", 
+                                fileInfo.setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&stoken=%s",
                                         getDomainName(), shareLinkInfo.getShareUrl(), fid, stoken));
                             }
                         }
-                        
+
                         result.add(fileInfo);
                     }
-                    
+
                     promise.complete(result);
                 })
                 .onFailure(t -> promise.fail("解析目录失败: " + t.getMessage()));
@@ -551,36 +568,36 @@ public class QkTool extends PanBase {
     @Override
     public Future<String> parseById() {
         Promise<String> promise = Promise.promise();
-        
+
         // 从 paramJson 中提取参数
         JsonObject paramJson = (JsonObject) shareLinkInfo.getOtherParam().get("paramJson");
         if (paramJson == null) {
             promise.fail("缺少必要的参数");
             return promise.future();
         }
-        
+
         String fid = paramJson.getString("fid");
         String pwdId = paramJson.getString("pwd_id");
         String stoken = paramJson.getString("stoken");
         String shareFidToken = paramJson.getString("share_fid_token");
-        
+
         if (fid == null || pwdId == null || stoken == null) {
             promise.fail("缺少必要的参数: fid, pwd_id 或 stoken");
             return promise.future();
         }
-        
+
         log.debug("夸克 parseById: fid={}, pwd_id={}, stoken={}", fid, pwdId, stoken);
-        
+
         // 调用下载链接 API
         JsonObject bodyJson = JsonObject.of()
                 .put("fids", JsonArray.of(fid))
                 .put("pwd_id", pwdId)
                 .put("stoken", stoken);
-        
+
         if (shareFidToken != null && !shareFidToken.isEmpty()) {
             bodyJson.put("fids_token", JsonArray.of(shareFidToken));
         }
-        
+
         client.postAbs(DOWNLOAD_URL)
                 .addQueryParam("pr", "ucpro")
                 .addQueryParam("fr", "pc")
@@ -589,17 +606,17 @@ public class QkTool extends PanBase {
                 .onSuccess(res -> {
                     log.debug("夸克 parseById 响应: {}", res.bodyAsString());
                     JsonObject resJson = asJson(res);
-                    
+
                     if (resJson.getInteger("code") == 31001) {
                         promise.fail("未登录或 Cookie 已失效");
                         return;
                     }
-                    
+
                     if (resJson.getInteger("code") != 0) {
                         promise.fail(DOWNLOAD_URL + " 返回异常: " + resJson);
                         return;
                     }
-                    
+
                     try {
                         JsonArray dataList = resJson.getJsonArray("data");
                         if (dataList == null || dataList.isEmpty()) {
@@ -617,7 +634,7 @@ public class QkTool extends PanBase {
                     }
                 })
                 .onFailure(t -> promise.fail("请求下载链接失败: " + t.getMessage()));
-        
+
         return promise.future();
     }
 }

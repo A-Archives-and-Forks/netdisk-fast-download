@@ -56,7 +56,6 @@ test-filelist.java
 *.temp
 *.log
 *.bak
-**/secret.yml
 *.swp
 *.swo
 *~

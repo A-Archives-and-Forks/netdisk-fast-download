@@ -64,7 +64,7 @@
         </div>
         <!-- 项目简介移到卡片内 -->
         <div class="project-intro">
-          <div class="intro-title">NFD网盘直链解析0.2.1</div>
+          <div class="intro-title">NFD网盘直链解析0.2.1b2</div>
           <div class="intro-desc">
             <div>支持网盘：蓝奏云、蓝奏云优享、小飞机盘、123云盘、奶牛快传、移动云空间、QQ邮箱云盘、QQ闪传等 <el-link style="color:#606cf5" href="https://github.com/qaiu/netdisk-fast-download?tab=readme-ov-file#%E7%BD%91%E7%9B%98%E6%94%AF%E6%8C%81%E6%83%85%E5%86%B5" target="_blank"> &gt;&gt; </el-link></div>
             <div>文件夹解析支持：蓝奏云、蓝奏云优享、小飞机盘、123云盘</div>
@@ -957,7 +957,8 @@ export default {
         } else if (panType === 'fj' || panType === 'lz' || panType === 'iz' || panType === 'le') {
           // 小飞机、蓝奏、优享、联想乐云：提示大文件需要认证
           const hasAuth = this.allAuthConfigs[panType]?.cookie || 
-                          this.allAuthConfigs[panType]?.username
+                          this.allAuthConfigs[panType]?.username ||
+                          (this.donateAccountCounts.active[panType.toUpperCase()] || 0) > 0
           if (!hasAuth) {
             this.$message.info({
               message: `${panName}的大文件解析需要配置认证信息，请在"配置认证"中添加`,

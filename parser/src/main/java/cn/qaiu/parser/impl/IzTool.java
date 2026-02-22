@@ -5,35 +5,50 @@ import cn.qaiu.entity.ShareLinkInfo;
 import cn.qaiu.parser.PanBase;
 import cn.qaiu.util.AESUtils;
 import cn.qaiu.util.AcwScV2Generator;
+import cn.qaiu.util.CommonUtils;
 import cn.qaiu.util.FileSizeConverter;
 import io.netty.handler.codec.http.cookie.DefaultCookie;
 import io.vertx.core.Future;
 import io.vertx.core.MultiMap;
 import io.vertx.core.Promise;
+import io.vertx.core.buffer.Buffer;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.client.HttpRequest;
+import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClientSession;
 import io.vertx.uritemplate.UriTemplate;
 import org.apache.commons.lang3.StringUtils;
 
-import java.util.*;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.UUID;
 
 /**
  * 蓝奏云优享
- * v019b22
+ *
  */
 public class IzTool extends PanBase {
 
-    WebClientSession webClientSession = WebClientSession.create(clientNoRedirects);
-
+    private static final String API_URL0 = "https://api.ilanzou.com/";
     private static final String API_URL_PREFIX = "https://api.ilanzou.com/unproved/";
 
     private static final String FIRST_REQUEST_URL = API_URL_PREFIX + "recommend/list?devType=6&devModel=Chrome" +
             "&uuid={uuid}&extra=2&timestamp={ts}&shareId={shareId}&type=0&offset=1&limit=60";
 
+    private static final String LOGIN_URL = API_URL_PREFIX +
+            "login?uuid={uuid}&devType=6&devCode={uuid}&devModel=chrome&devVersion=127&appVersion=&timestamp={ts}&appToken=&extra=2";
+
+    // https://api.ilanzou.com/proved/user/info/map?devType=3&devModel=Chrome&uuid=TInRHH3QzRaMo-Ajl2PkJ&extra=2&timestamp=EC2C6E7F45EB21338A17A7621E0BB437
+    private static final String TOKEN_VERIFY_URL = API_URL0 +
+            "proved/user/info/map?devType=6&devModel=Chrome&uuid={uuid}&extra=2&timestamp={ts}";
+
     private static final String SECOND_REQUEST_URL = API_URL_PREFIX + "file/redirect?downloadId={fidEncode}&enable=1" +
             "&devType=6&uuid={uuid}&timestamp={ts}&auth={auth}&shareId={dataKey}";
-    // downloadId=x&enable=1&devType=6&uuid=x&timestamp=x&auth=x&shareId=lGFndCM
+
+    private static final String SECOND_REQUEST_URL_VIP = API_URL_PREFIX + "file/redirect?uuid={uuid}&devType=6&devCode={uuid}" +
+            "&devModel=chrome&devVersion=127&appVersion=&timestamp={ts}&appToken={appToken}&enable=1&downloadId={fidEncode}&auth={auth}";
+
 
     private static final String VIP_REQUEST_URL = API_URL_PREFIX + "/buy/vip/list?devType=6&devModel=Chrome&uuid" +
             "={uuid}&extra=2&timestamp={ts}";
@@ -42,16 +57,15 @@ public class IzTool extends PanBase {
             "={uuid}&extra=2&timestamp={ts}&shareId={shareId}&folderId" +
             "={folderId}&offset=1&limit=60";
 
-    long nowTs = System.currentTimeMillis();
-    String tsEncode = AESUtils.encrypt2HexIz(Long.toString(nowTs));
-    String uuid = UUID.randomUUID().toString();
+
+    WebClientSession webClientSession = WebClientSession.create(clientNoRedirects);
 
     private static final MultiMap header;
 
     static {
         header = MultiMap.caseInsensitiveMultiMap();
         header.set("Accept", "application/json, text/plain, */*");
-        header.set("Accept-Encoding", "gzip, deflate, br, zstd");
+        header.set("Accept-Encoding", "gzip, deflate");
         header.set("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
         header.set("Cache-Control", "no-cache");
         header.set("Connection", "keep-alive");
@@ -69,38 +83,59 @@ public class IzTool extends PanBase {
         header.set("sec-ch-ua-mobile", "?0");
         header.set("sec-ch-ua-platform", "\"Windows\"");
     }
-
     public IzTool(ShareLinkInfo shareLinkInfo) {
         super(shareLinkInfo);
     }
 
-    private void setCookie(String html) {
-        int beginIndex = html.indexOf("arg1='") + 6;
-        String arg1 = html.substring(beginIndex, html.indexOf("';", beginIndex));
-        String acw_sc__v2 = AcwScV2Generator.acwScV2Simple(arg1);
-        // 创建一个 Cookie 并放入 CookieStore
-        DefaultCookie nettyCookie = new DefaultCookie("acw_sc__v2", acw_sc__v2);
-        nettyCookie.setDomain(".ilanzou.com"); // 设置域名
-        nettyCookie.setPath("/");             // 设置路径
-        nettyCookie.setSecure(false);
-        nettyCookie.setHttpOnly(false);
-        webClientSession.cookieStore().put(nettyCookie);
-    }
+    String uuid = UUID.randomUUID().toString().toLowerCase(); // 也可以使用 UUID.randomUUID().toString()
+
+    public static String token = null;
+    public static boolean authFlag = true;
 
     public Future<String> parse() {
-        String shareId = shareLinkInfo.getShareKey();
 
-        // 24.5.12 ilanzou改规则无需计算shareId
-        // String shareId = String.valueOf(AESUtils.idEncryptIz(dataKey));
+        String shareId = shareLinkInfo.getShareKey(); // String.valueOf(AESUtils.idEncrypt(dataKey));
+        long nowTs = System.currentTimeMillis();
+        String tsEncode = AESUtils.encrypt2HexIz(Long.toString(nowTs));
 
-        // 第一次请求 获取文件信息
-        // POST https://api.ilanzou.com/ws/recommend/list?devType=6&devModel=Chrome&extra=2&shareId=146731&type=0&offset=1&limit=60
-        String url = StringUtils.isBlank(shareLinkInfo.getSharePassword()) ? FIRST_REQUEST_URL
-                : (FIRST_REQUEST_URL + "&code=" + shareLinkInfo.getSharePassword());
+        // 检查并输出认证状态
+        if (shareLinkInfo.getOtherParam().containsKey("auths")) {
+            boolean isTempAuth = shareLinkInfo.getOtherParam().containsKey("__TEMP_AUTH_ADDED");
+            log.info("文件解析检测到认证信息: isTempAuth={}, authFlag={}, token={}", 
+                    isTempAuth, authFlag, token != null ? "已登录(" + token.substring(0, Math.min(10, token.length())) + "...)" : "未登录");
+            
+            // 如果需要认证但还没有token，先执行登录
+            if ((isTempAuth || authFlag) && token == null) {
+                log.info("文件解析需要登录，开始执行登录流程...");
+                MultiMap auths = (MultiMap) shareLinkInfo.getOtherParam().get("auths");
+                return login(tsEncode, auths)
+                        .compose(v -> {
+                            log.info("文件解析预登录成功，继续解析流程");
+                            return parseWithAuth(shareId, tsEncode);
+                        })
+                        .onFailure(err -> {
+                            log.warn("文件解析预登录失败: {}，尝试使用免登录模式", err.getMessage());
+                            // 登录失败，继续使用免登录模式
+                        });
+            } else if (token != null) {
+                log.info("文件解析使用已有token: {}...", token.substring(0, Math.min(10, token.length())));
+            }
+        } else {
+            log.debug("文件解析无认证信息，使用免登录模式");
+        }
+
+        return parseWithAuth(shareId, tsEncode);
+    }
+
+    private Future<String> parseWithAuth(String shareId, String tsEncode) {
+        // 24.5.12 飞机盘 规则修改 需要固定UUID先请求会员接口, 再请求后续接口
         webClientSession.postAbs(UriTemplate.of(VIP_REQUEST_URL))
                 .setTemplateParam("uuid", uuid)
                 .setTemplateParam("ts", tsEncode)
                 .send().onSuccess(r0 -> { // 忽略res
+
+                    String url = StringUtils.isBlank(shareLinkInfo.getSharePassword()) ? FIRST_REQUEST_URL
+                            : (FIRST_REQUEST_URL + "&code=" + shareLinkInfo.getSharePassword());
                     // 第一次请求 获取文件信息
                     // POST https://api.feijipan.com/ws/recommend/list?devType=6&devModel=Chrome&extra=2&shareId=146731&type=0&offset=1&limit=60
                     webClientSession.postAbs(UriTemplate.of(url))
@@ -121,34 +156,41 @@ public class IzTool extends PanBase {
                                             .setTemplateParam("uuid", uuid)
                                             .setTemplateParam("ts", tsEncode)
                                             .send().onSuccess(res2 -> {
-                                                handleParseResponse(asText(res2), shareId);
-                                            }).onFailure(handleFail(FIRST_REQUEST_URL));
+                                                processFirstResponse(res2);
+                                            }).onFailure(handleFail("请求1-重试"));
                                     return;
                                 }
-                                handleParseResponse(resBody, shareId);
-                            }).onFailure(handleFail(FIRST_REQUEST_URL));
-                });
+                                processFirstResponse(res);
+                            }).onFailure(handleFail("请求1"));
+
+                }).onFailure(handleFail("请求1"));
+
         return promise.future();
     }
 
-    private void handleParseResponse(String resBody, String shareId) {
-        JsonObject resJson;
-        try {
-            resJson = new JsonObject(resBody);
-        } catch (Exception e) {
-            fail(FIRST_REQUEST_URL + " 解析JSON失败: " + resBody);
-            return;
-        }
-        if (resJson.isEmpty()) {
-            fail(FIRST_REQUEST_URL + " 返回内容为空");
-            return;
-        }
+    /**
+     * 设置 cookie
+     */
+    private void setCookie(String html) {
+        int beginIndex = html.indexOf("arg1='") + 6;
+        String arg1 = html.substring(beginIndex, html.indexOf("';", beginIndex));
+        String acw_sc__v2 = AcwScV2Generator.acwScV2Simple(arg1);
+        // 创建一个 Cookie 并放入 CookieStore
+        DefaultCookie nettyCookie = new DefaultCookie("acw_sc__v2", acw_sc__v2);
+        nettyCookie.setDomain(".ilanzou.com"); // 设置域名
+        nettyCookie.setPath("/");             // 设置路径
+        nettyCookie.setSecure(false);
+        nettyCookie.setHttpOnly(false);
+        webClientSession.cookieStore().put(nettyCookie);
+    }
+
+    /**
+     * 处理第一次请求的响应
+     */
+    private void processFirstResponse(HttpResponse<Buffer> res) {
+        JsonObject resJson = asJson(res);
         if (resJson.getInteger("code") != 200) {
             fail(FIRST_REQUEST_URL + " 返回异常: " + resJson);
-            return;
-        }
-        if (resJson.getJsonArray("list").isEmpty()) {
-            fail(FIRST_REQUEST_URL + " 解析文件列表为空: " + resJson);
             return;
         }
         if (!resJson.containsKey("list") || resJson.getJsonArray("list").isEmpty()) {
@@ -167,30 +209,251 @@ public class IzTool extends PanBase {
             promise.complete(fileList.getInteger("folderId").toString());
             return;
         }
+        // 提取文件信息
+        extractFileInfo(fileList, fileInfo);
+        getDownURL(resJson);
+    }
 
+    private void getDownURL(JsonObject resJson) {
+        String dataKey = shareLinkInfo.getShareKey();
+        // 文件Id
+        JsonObject fileInfo = resJson.getJsonArray("list").getJsonObject(0);
         String fileId = fileInfo.getString("fileIds");
         String userId = fileInfo.getString("userId");
         // 其他参数
-        // String fidEncode = AESUtils.encrypt2HexIz(fileId + "|");
+        long nowTs2 = System.currentTimeMillis();
+        String tsEncode2 = AESUtils.encrypt2HexIz(Long.toString(nowTs2));
         String fidEncode = AESUtils.encrypt2HexIz(fileId + "|" + userId);
-        String auth = AESUtils.encrypt2HexIz(fileId + "|" + nowTs);
-        // 第二次请求
-        webClientSession.getAbs(UriTemplate.of(SECOND_REQUEST_URL))
-                .setTemplateParam("fidEncode", fidEncode)
-                .setTemplateParam("uuid", uuid)
-                .setTemplateParam("ts", tsEncode)
-                .setTemplateParam("auth", auth)
-                .setTemplateParam("shareId", shareId)
-                .putHeaders(header).send().onSuccess(res2 -> {
-                    MultiMap headers = res2.headers();
-                    if (!headers.contains("Location")) {
-                        fail(SECOND_REQUEST_URL + " 未找到重定向URL: \n" + headers);
-                        return;
-                    }
-                    promise.complete(headers.get("Location"));
-                }).onFailure(handleFail(SECOND_REQUEST_URL));
+        String auth = AESUtils.encrypt2HexIz(fileId + "|" + nowTs2);
+
+        // 检查是否有认证信息
+        if (shareLinkInfo.getOtherParam().containsKey("auths")) {
+            // 检查是否为临时认证（临时认证每次都尝试登录）
+            boolean isTempAuth = shareLinkInfo.getOtherParam().containsKey("__TEMP_AUTH_ADDED");
+            // 如果是临时认证，或者是后台配置且authFlag为true，则尝试使用认证
+            if (isTempAuth || authFlag) {
+                log.debug("尝试使用认证信息解析, isTempAuth={}, authFlag={}", isTempAuth, authFlag);
+                HttpRequest<Buffer> httpRequest =
+                        webClientSession.getAbs(UriTemplate.of(SECOND_REQUEST_URL_VIP))
+                                .setTemplateParam("fidEncode", fidEncode)
+                                .setTemplateParam("uuid", uuid)
+                                .setTemplateParam("ts", tsEncode2)
+                                .setTemplateParam("auth", auth)
+                                .setTemplateParam("dataKey", dataKey);
+                MultiMap auths = (MultiMap) shareLinkInfo.getOtherParam().get("auths");
+                if (token == null) {
+                    // 执行登录
+                    login(tsEncode2, auths).onFailure(failRes-> {
+                        log.warn("登录失败: {}", failRes.getMessage());
+                        fail(failRes.getMessage());
+                    }).onSuccess(r-> {
+                        httpRequest.setTemplateParam("appToken", header.get("appToken"))
+                                .putHeaders(header);
+                        httpRequest.send().onSuccess(this::down).onFailure(handleFail("请求2"));
+                    });
+                } else {
+                    // 验证token
+                    webClientSession.postAbs(UriTemplate.of(TOKEN_VERIFY_URL))
+                            .setTemplateParam("uuid", uuid)
+                            .setTemplateParam("ts", tsEncode2)
+                            .putHeaders(header).send().onSuccess(res -> {
+                                // log.info("res: {}",asJson(res));
+                                if (asJson(res).getInteger("code") != 200) {
+                                    login(tsEncode2, auths).onFailure(failRes -> {
+                                        log.warn("重新登录失败: {}", failRes.getMessage());
+                                        fail(failRes.getMessage());
+                                    }).onSuccess(r-> {
+                                        httpRequest.setTemplateParam("appToken", header.get("appToken"))
+                                                .putHeaders(header);
+                                        httpRequest.send().onSuccess(this::down).onFailure(handleFail("请求2"));
+                                    });
+                                } else {
+                                    httpRequest.setTemplateParam("appToken", header.get("appToken"))
+                                            .putHeaders(header);
+                                    httpRequest.send().onSuccess(this::down).onFailure(handleFail("请求2"));
+                                }
+                            }).onFailure(handleFail("Token验证"));
+                }
+            } else {
+                // authFlag 为 false，使用免登录解析
+                log.debug("authFlag=false，使用免登录解析");
+                webClientSession.getAbs(UriTemplate.of(SECOND_REQUEST_URL))
+                        .putHeaders(header)
+                        .setTemplateParam("fidEncode", fidEncode)
+                        .setTemplateParam("uuid", uuid)
+                        .setTemplateParam("ts", tsEncode2)
+                        .setTemplateParam("auth", auth)
+                        .setTemplateParam("dataKey", dataKey).send()
+                        .onSuccess(this::down).onFailure(handleFail("请求2"));
+            }
+        } else {
+            // 没有认证信息，使用免登录解析
+            log.debug("无认证信息，使用免登录解析");
+            webClientSession.getAbs(UriTemplate.of(SECOND_REQUEST_URL))
+                    .putHeaders(header)
+                    .setTemplateParam("fidEncode", fidEncode)
+                    .setTemplateParam("uuid", uuid)
+                    .setTemplateParam("ts", tsEncode2)
+                    .setTemplateParam("auth", auth)
+                    .setTemplateParam("dataKey", dataKey).send()
+                    .onSuccess(this::down).onFailure(handleFail("请求2"));
+        }
     }
 
+    private Future<Void> login(String tsEncode2, MultiMap auths) {
+        Promise<Void> promise1 = Promise.promise();
+        webClientSession.postAbs(UriTemplate.of(LOGIN_URL))
+                .setTemplateParam("uuid",uuid)
+                .setTemplateParam("ts", tsEncode2)
+                .putHeaders(header)
+                .sendJsonObject(JsonObject.of("loginName", auths.get("username"), "loginPwd", auths.get("password")))
+                .onSuccess(res2->{
+                    JsonObject json = asJson(res2);
+                    if (json.getInteger("code") == 200) {
+                        token = json.getJsonObject("data").getString("appToken");
+                        header.set("appToken", token);
+                        log.info("登录成功 token: {}", token);
+                        promise1.complete();
+                    } else {
+                        // 检查是否为临时认证
+                        boolean isTempAuth = shareLinkInfo.getOtherParam().containsKey("__TEMP_AUTH_ADDED");
+                        if (isTempAuth) {
+                            // 临时认证失败，直接返回错误，不影响后台配置的认证
+                            log.warn("临时认证失败: {}", json.getString("msg"));
+                            promise1.fail("临时认证失败: " + json.getString("msg"));
+                        } else {
+                            // 后台配置的认证失败，设置authFlag并返回失败，让下次请求使用免登陆解析
+                            log.warn("后台配置认证失败: {}, authFlag将设为false，请重新解析", json.getString("msg"));
+                            authFlag = false;
+                            promise1.fail("认证失败: " + json.getString("msg") + ", 请重新解析将使用免登陆模式");
+                        }
+                    }
+                }).onFailure(err -> {
+                    log.error("登录请求异常: {}", err.getMessage());
+                    promise1.fail("登录请求异常: " + err.getMessage());
+                });
+        return promise1.future();
+    }
+
+    /**
+     * 从接口返回数据中提取文件信息
+     */
+    private void extractFileInfo(JsonObject fileList, JsonObject shareInfo) {
+        try {
+            // 文件名
+            String fileName = fileList.getString("fileName");
+            shareLinkInfo.getOtherParam().put("fileName", fileName);
+            
+            // 文件大小 (KB -> Bytes)
+            Long fileSize = fileList.getLong("fileSize", 0L) * 1024;
+            shareLinkInfo.getOtherParam().put("fileSize", fileSize);
+            shareLinkInfo.getOtherParam().put("fileSizeFormat", FileSizeConverter.convertToReadableSize(fileSize));
+            
+            // 文件图标
+            String fileIcon = fileList.getString("fileIcon");
+            if (StringUtils.isNotBlank(fileIcon)) {
+                shareLinkInfo.getOtherParam().put("fileIcon", fileIcon);
+            }
+            
+            // 文件ID
+            Long fileId = fileList.getLong("fileId");
+            if (fileId != null) {
+                shareLinkInfo.getOtherParam().put("fileId", fileId.toString());
+            }
+            
+            // 文件类型 (1=文件, 2=目录)
+            Integer fileType = fileList.getInteger("fileType", 1);
+            shareLinkInfo.getOtherParam().put("fileType", fileType == 1 ? "file" : "folder");
+            
+            // 下载次数
+            Integer downloads = fileList.getInteger("fileDownloads", 0);
+            shareLinkInfo.getOtherParam().put("downloadCount", downloads);
+            
+            // 点赞数
+            Integer likes = fileList.getInteger("fileLikes", 0);
+            shareLinkInfo.getOtherParam().put("likeCount", likes);
+            
+            // 评论数
+            Integer comments = fileList.getInteger("fileComments", 0);
+            shareLinkInfo.getOtherParam().put("commentCount", comments);
+            
+            // 评分
+            Double stars = fileList.getDouble("fileStars", 0.0);
+            shareLinkInfo.getOtherParam().put("stars", stars);
+            
+            // 更新时间
+            String updateTime = fileList.getString("updTime");
+            if (StringUtils.isNotBlank(updateTime)) {
+                shareLinkInfo.getOtherParam().put("updateTime", updateTime);
+            }
+            
+            // 创建时间
+            String createTime = null;
+            
+            // 分享信息
+            if (shareInfo != null) {
+                // 分享ID
+                Integer shareId = shareInfo.getInteger("shareId");
+                if (shareId != null) {
+                    shareLinkInfo.getOtherParam().put("shareId", shareId.toString());
+                }
+                
+                // 上传时间
+                String addTime = shareInfo.getString("addTime");
+                if (StringUtils.isNotBlank(addTime)) {
+                    shareLinkInfo.getOtherParam().put("createTime", addTime);
+                    createTime = addTime;
+                }
+                
+                // 预览次数
+                Integer previewNum = shareInfo.getInteger("previewNum", 0);
+                shareLinkInfo.getOtherParam().put("previewCount", previewNum);
+                
+                // 用户信息
+                JsonObject userMap = shareInfo.getJsonObject("map");
+                if (userMap != null) {
+                    String userName = userMap.getString("userName");
+                    if (StringUtils.isNotBlank(userName)) {
+                        shareLinkInfo.getOtherParam().put("userName", userName);
+                    }
+                    
+                    // VIP信息
+                    Integer isVip = userMap.getInteger("isVip", 0);
+                    shareLinkInfo.getOtherParam().put("isVip", isVip == 1);
+                }
+            }
+            
+            // 创建 FileInfo 对象并存入 otherParam
+            FileInfo fileInfoObj = new FileInfo()
+                    .setPanType(shareLinkInfo.getType())
+                    .setFileName(fileName)
+                    .setFileId(fileList.getLong("fileId") != null ? fileList.getLong("fileId").toString() : null)
+                    .setSize(fileSize)
+                    .setSizeStr(FileSizeConverter.convertToReadableSize(fileSize))
+                    .setFileType(fileType == 1 ? "file" : "folder")
+                    .setFileIcon(fileList.getString("fileIcon"))
+                    .setDownloadCount(downloads)
+                    .setCreateTime(createTime)
+                    .setUpdateTime(updateTime);
+            shareLinkInfo.getOtherParam().put("fileInfo", fileInfoObj);
+            
+            log.debug("提取文件信息成功: fileName={}, fileSize={}, downloads={}", 
+                    fileName, fileSize, downloads);
+        } catch (Exception e) {
+            log.warn("提取文件信息失败: {}", e.getMessage());
+        }
+    }
+
+    private void down(HttpResponse<Buffer> res2) {
+        MultiMap headers = res2.headers();
+        if (!headers.contains("Location") || StringUtils.isBlank(headers.get("Location"))) {
+            fail("找不到下载链接可能服务器已被禁止或者配置的认证信息有误");
+            return;
+        }
+        promise.complete(headers.get("Location"));
+    }
+
+    // 目录解析
     @Override
     public Future<List<FileInfo>> parseFileList() {
         Promise<List<FileInfo>> promise = Promise.promise();
@@ -205,11 +468,7 @@ public class IzTool extends PanBase {
             return promise.future();
         }
         parse().onSuccess(id -> {
-            if (id != null && id.matches("^[a-zA-Z0-9]+$")) {
-                parserDir(id, shareId, promise);
-            } else {
-                promise.fail("解析目录ID失败");
-            }
+            parserDir(id, shareId, promise);
         }).onFailure(failRes -> {
             log.error("解析目录失败: {}", failRes.getMessage());
             promise.fail(failRes);
@@ -218,6 +477,22 @@ public class IzTool extends PanBase {
     }
 
     private void parserDir(String id, String shareId, Promise<List<FileInfo>> promise) {
+        if (id != null && (id.startsWith("http://") || id.startsWith("https://"))) {
+            FileInfo fileInfo = new FileInfo();
+            fileInfo.setFileName(id)
+                    .setFileId(id)
+                    .setFileType("file")
+                    .setParserUrl(id)
+                    .setPanType(shareLinkInfo.getType());
+            List<FileInfo> result = new ArrayList<>();
+            result.add(fileInfo);
+            promise.complete(result);
+            return;
+        }
+
+        long nowTs = System.currentTimeMillis();
+        String tsEncode = AESUtils.encrypt2HexIz(Long.toString(nowTs));
+
         log.debug("开始解析目录: {}, shareId: {}, uuid: {}, ts: {}", id, shareId, uuid, tsEncode);
         // 开始解析目录: 164312216, shareId: bPMsbg5K, uuid: 0fmVWTx2Ea4zFwkpd7KXf, ts: 20865d7b7f00828279f437cd1f097860
         // 拿到目录ID
@@ -228,103 +503,134 @@ public class IzTool extends PanBase {
                 .setTemplateParam("ts", tsEncode)
                 .setTemplateParam("folderId", id)
                 .send().onSuccess(res -> {
-                    JsonObject jsonObject;
-                    try {
-                        jsonObject = asJson(res);
-                    } catch (Exception e) {
-                        promise.fail(FIRST_REQUEST_URL + " 解析JSON失败: " + res.bodyAsString());
+                    String resBody = asText(res);
+                    // 检查是否包含 cookie 验证
+                    if (resBody.contains("var arg1='")) {
+                        log.debug("目录解析需要 cookie 验证，重新创建 session");
+                        webClientSession = WebClientSession.create(clientNoRedirects);
+                        setCookie(resBody);
+                        // 重新请求目录列表
+                        webClientSession.postAbs(UriTemplate.of(FILE_LIST_URL))
+                                .putHeaders(header)
+                                .setTemplateParam("shareId", shareId)
+                                .setTemplateParam("uuid", uuid)
+                                .setTemplateParam("ts", tsEncode)
+                                .setTemplateParam("folderId", id)
+                                .send().onSuccess(res2 -> {
+                                    processDirResponse(res2, shareId, promise);
+                                }).onFailure(err -> {
+                                    log.error("目录解析重试失败: {}", err.getMessage());
+                                    promise.fail("目录解析失败: " + err.getMessage());
+                                });
                         return;
                     }
-                    // System.out.println(jsonObject.encodePrettily());
-                    JsonArray list = jsonObject.getJsonArray("list");
-                    ArrayList<FileInfo> result = new ArrayList<>();
-                    list.forEach(item->{
-                        JsonObject fileJson = (JsonObject) item;
-                        FileInfo fileInfo = new FileInfo();
-
-                        // 映射已知字段
-                        String fileId = fileJson.getString("fileId");
-                        String userId = fileJson.getString("userId");
-
-                        // 回传用到的参数
-                        //"fidEncode", paramJson.getString("fidEncode"))
-                        //"uuid", paramJson.getString("uuid"))
-                        //"ts", paramJson.getString("ts"))
-                        //"auth", paramJson.getString("auth"))
-                        //"shareId", paramJson.getString("shareId"))
-                        String fidEncode = AESUtils.encrypt2HexIz(fileId + "|" + userId);
-                        String auth = AESUtils.encrypt2HexIz(fileId + "|" + nowTs);
-                        JsonObject entries = JsonObject.of(
-                                "fidEncode", fidEncode,
-                                "uuid", uuid,
-                                "ts", tsEncode,
-                                "auth", auth,
-                                "shareId", shareId);
-                        byte[] encode = Base64.getEncoder().encode(entries.encode().getBytes());
-                        String param = new String(encode);
-
-                        if (fileJson.getInteger("fileType") == 2) {
-                            // 如果是目录
-                            fileInfo.setFileName(fileJson.getString("name"))
-                                    .setFileId(fileJson.getString("folderId"))
-                                    .setCreateTime(fileJson.getString("updTime"))
-                                    .setFileType("folder")
-                                    .setSize(0L)
-                                    .setSizeStr("0B")
-                                    .setCreateBy(fileJson.getLong("userId").toString())
-                                    .setDownloadCount(fileJson.getInteger("fileDownloads"))
-                                    .setCreateTime(fileJson.getString("updTime"))
-                                    .setFileIcon(fileJson.getString("fileIcon"))
-                                    .setPanType(shareLinkInfo.getType())
-                                    // 设置目录解析的URL
-                                    .setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&uuid=%s", getDomainName(),
-                                            shareLinkInfo.getShareUrl(), fileJson.getString("folderId"), uuid));
-                            result.add(fileInfo);
-                            return;
-                        }
-                        long fileSize = fileJson.getLong("fileSize") * 1024;
-                        fileInfo.setFileName(fileJson.getString("fileName"))
-                                .setFileId(fileId)
-                                .setCreateTime(fileJson.getString("createTime"))
-                                .setFileType("file")
-                                .setSize(fileSize)
-                                .setSizeStr(FileSizeConverter.convertToReadableSize(fileSize))
-                                .setCreateBy(fileJson.getLong("userId").toString())
-                                .setDownloadCount(fileJson.getInteger("fileDownloads"))
-                                .setCreateTime(fileJson.getString("updTime"))
-                                .setFileIcon(fileJson.getString("fileIcon"))
-                                .setPanType(shareLinkInfo.getType())
-                                .setParserUrl(String.format("%s/v2/redirectUrl/%s/%s", getDomainName(),
-                                        shareLinkInfo.getType(), param))
-                                .setPreviewUrl(String.format("%s/v2/viewUrl/%s/%s", getDomainName(),
-                                        shareLinkInfo.getType(), param));
-                        result.add(fileInfo);
-                    });
-                    promise.complete(result);
-                }).onFailure(failRes -> {
-                    log.error("解析目录请求失败: {}", failRes.getMessage());
-                    promise.fail(failRes);
+                    processDirResponse(res, shareId, promise);
+                }).onFailure(err -> {
+                    log.error("目录解析请求失败: {}", err.getMessage());
+                    promise.fail("目录解析失败: " + err.getMessage());
                 });
+    }
+
+    /**
+     * 处理目录解析响应
+     */
+    private void processDirResponse(HttpResponse<Buffer> res, String shareId, Promise<List<FileInfo>> promise) {
+        try {
+            JsonObject jsonObject = asJson(res);
+            log.debug("目录解析响应: {}", jsonObject.encodePrettily());
+            
+            if (!jsonObject.containsKey("list")) {
+                log.error("目录解析响应缺少 list 字段: {}", jsonObject);
+                promise.fail("目录解析失败: 响应格式错误");
+                return;
+            }
+            
+            JsonArray list = jsonObject.getJsonArray("list");
+            ArrayList<FileInfo> result = new ArrayList<>();
+            list.forEach(item->{
+                JsonObject fileJson = (JsonObject) item;
+                FileInfo fileInfo = new FileInfo();
+
+                // 映射已知字段
+                String fileId = fileJson.getString("fileId");
+                String userId = fileJson.getString("userId");
+
+                // 其他参数 - 每个文件使用新的时间戳
+                long nowTs2 = System.currentTimeMillis();
+                String tsEncode2 = AESUtils.encrypt2HexIz(Long.toString(nowTs2));
+                String fidEncode = AESUtils.encrypt2HexIz(fileId + "|" + userId);
+                String auth = AESUtils.encrypt2HexIz(fileId + "|" + nowTs2);
+
+                // 回传用到的参数
+                JsonObject entries = JsonObject.of(
+                        "fidEncode", fidEncode,
+                        "uuid", uuid,
+                        "ts", tsEncode2,
+                        "auth", auth,
+                        "shareId", shareId);
+                String param = CommonUtils.urlBase64Encode(entries.encode());
+
+                if (fileJson.getInteger("fileType") == 2) {
+                    // 如果是目录
+                    fileInfo.setFileName(fileJson.getString("name"))
+                            .setFileId(fileJson.getString("folderId"))
+                            .setCreateTime(fileJson.getString("updTime"))
+                            .setFileType("folder")
+                            .setSize(0L)
+                            .setSizeStr("0B")
+                            .setCreateBy(fileJson.getLong("userId").toString())
+                            .setDownloadCount(fileJson.getInteger("fileDownloads"))
+                            .setCreateTime(fileJson.getString("updTime"))
+                            .setFileIcon(fileJson.getString("fileIcon"))
+                            .setPanType(shareLinkInfo.getType())
+                            // 设置目录解析的URL
+                            .setParserUrl(String.format("%s/v2/getFileList?url=%s&dirId=%s&uuid=%s", getDomainName(),
+                                    shareLinkInfo.getShareUrl(), fileJson.getString("folderId"), uuid));
+                    result.add(fileInfo);
+                    return;
+                }
+                long fileSize = fileJson.getLong("fileSize") * 1024;
+                fileInfo.setFileName(fileJson.getString("fileName"))
+                        .setFileId(fileId)
+                        .setCreateTime(fileJson.getString("createTime"))
+                        .setFileType("file")
+                        .setSize(fileSize)
+                        .setSizeStr(FileSizeConverter.convertToReadableSize(fileSize))
+                        .setCreateBy(fileJson.getLong("userId").toString())
+                        .setDownloadCount(fileJson.getInteger("fileDownloads"))
+                        .setCreateTime(fileJson.getString("updTime"))
+                        .setFileIcon(fileJson.getString("fileIcon"))
+                        .setPanType(shareLinkInfo.getType())
+                        .setParserUrl(String.format("%s/v2/redirectUrl/%s/%s", getDomainName(),
+                                shareLinkInfo.getType(), param))
+                        .setPreviewUrl(String.format("%s/v2/viewUrl/%s/%s", getDomainName(),
+                                shareLinkInfo.getType(), param));
+                result.add(fileInfo);
+            });
+            promise.complete(result);
+        } catch (Exception e) {
+            log.error("处理目录响应异常: {}", e.getMessage(), e);
+            promise.fail("目录解析失败: " + e.getMessage());
+        }
     }
 
     @Override
     public Future<String> parseById() {
-        // 第二次请求
-        JsonObject paramJson = (JsonObject)shareLinkInfo.getOtherParam().get("paramJson");
+        JsonObject paramJson = (JsonObject) shareLinkInfo.getOtherParam().get("paramJson");
+        // 使用免登录接口
         webClientSession.getAbs(UriTemplate.of(SECOND_REQUEST_URL))
+                .putHeaders(header)
                 .setTemplateParam("fidEncode", paramJson.getString("fidEncode"))
                 .setTemplateParam("uuid", paramJson.getString("uuid"))
                 .setTemplateParam("ts", paramJson.getString("ts"))
                 .setTemplateParam("auth", paramJson.getString("auth"))
-                .setTemplateParam("shareId", paramJson.getString("shareId"))
-                .putHeaders(header).send().onSuccess(res2 -> {
-                    MultiMap headers = res2.headers();
-                    if (!headers.contains("Location")) {
-                        fail(SECOND_REQUEST_URL + " 未找到重定向URL: \n" + res2.headers());
-                        return;
-                    }
-                    promise.complete(headers.get("Location"));
-                }).onFailure(handleFail(SECOND_REQUEST_URL));
+                .setTemplateParam("dataKey", paramJson.getString("shareId"))
+                .send().onSuccess(this::down).onFailure(handleFail("parseById"));
         return promise.future();
+    }
+
+    public static void resetToken() {
+        token = null;
+        authFlag = true;
     }
 }
