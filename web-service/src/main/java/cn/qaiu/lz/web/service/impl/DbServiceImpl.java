@@ -422,8 +422,8 @@ public class DbServiceImpl implements DbService {
 
         return ensureFailCountColumn(client)
                 .compose(v -> client.preparedQuery(updateSql)
-                        .execute(Tuple.of(DONATED_ACCOUNT_DISABLE_THRESHOLD, accountId))
-                        .mapEmpty())
+                        .execute(Tuple.of(DONATED_ACCOUNT_DISABLE_THRESHOLD, accountId)))
+                .map(rows -> (Void) null)
                 .onFailure(e -> log.error("recordDonatedAccountFailureByToken failed", e));
     }
 

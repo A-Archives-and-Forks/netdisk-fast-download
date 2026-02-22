@@ -48,6 +48,9 @@ public class RouterVerticle extends AbstractVerticle {
         } else {
             options = new HttpServerOptions();
         }
+        
+        // 绑定到 0.0.0.0 以允许外部访问
+        options.setHost("0.0.0.0");
         options.setPort(port);
         server = vertx.createHttpServer(options);
 
