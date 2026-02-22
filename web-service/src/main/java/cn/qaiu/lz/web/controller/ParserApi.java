@@ -485,6 +485,10 @@ public class ParserApi {
      */
     @RouteMapping(value = "/donateAccount", method = RouteMethod.POST)
     public Future<JsonObject> donateAccount(HttpServerRequest request, JsonObject body) {
+        if (body == null || StringUtils.isBlank(body.getString("panType"))
+                || StringUtils.isBlank(body.getString("authType"))) {
+            return Future.succeededFuture(JsonResult.error("panType and authType are required").toJsonObject());
+        }
         String ip = request.remoteAddress().host();
         body.put("ip", ip);
         return dbService.saveDonatedAccount(body);
