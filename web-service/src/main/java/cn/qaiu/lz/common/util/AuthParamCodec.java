@@ -78,12 +78,17 @@ public class AuthParamCodec {
         }
 
         try {
-            // Step 1: URL解码
-            String urlDecoded = URLDecoder.decode(encryptedAuth, StandardCharsets.UTF_8);
-            log.debug("URL解码结果: {}", urlDecoded);
+            // Step 1: URL解码（兼容：有些框架已自动解码，此处避免再次把 '+' 变成空格）
+            String normalized = encryptedAuth;
+            if (normalized.contains("%")) {
+                normalized = URLDecoder.decode(normalized, StandardCharsets.UTF_8);
+            }
+            // 兼容 query 参数中 '+' 被还原为空格的情况
+            normalized = normalized.replace(' ', '+');
+            log.debug("认证参数规范化结果: {}", normalized);
 
             // Step 2: Base64解码
-            byte[] base64Decoded = Base64.getDecoder().decode(urlDecoded);
+            byte[] base64Decoded = Base64.getDecoder().decode(normalized);
             log.debug("Base64解码成功，长度: {}", base64Decoded.length);
 
             // Step 3: AES解密

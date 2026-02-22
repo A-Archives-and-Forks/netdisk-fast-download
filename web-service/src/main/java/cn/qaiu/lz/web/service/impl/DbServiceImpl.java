@@ -366,11 +366,21 @@ public class DbServiceImpl implements DbService {
 
                         return Future.all(usernameFuture, passwordFuture, tokenFuture, failureTokenFuture)
                                 .map(compositeFuture -> {
+                                    String username = usernameFuture.result();
+                                    String password = passwordFuture.result();
+                                    String token = tokenFuture.result();
+
+                                    // 如果解密后没有任何可用凭证，返回空对象，避免把密文当作明文认证参数下发给前端
+                                    if (StringUtils.isBlank(username) && StringUtils.isBlank(password) && StringUtils.isBlank(token)) {
+                                        log.warn("random donated account has no usable credential after decrypt, accountId={}", row.getLong("id"));
+                                        return JsonResult.data(new JsonObject()).toJsonObject();
+                                    }
+
                                     JsonObject account = new JsonObject();
                                     account.put("authType", row.getString("auth_type"));
-                                    account.put("username", usernameFuture.result());
-                                    account.put("password", passwordFuture.result());
-                                    account.put("token", tokenFuture.result());
+                                    account.put("username", username);
+                                    account.put("password", password);
+                                    account.put("token", token);
                                     account.put("donatedAccountToken", failureTokenFuture.result());
                                     return JsonResult.data(account).toJsonObject();
                                 });
@@ -450,8 +460,10 @@ public class DbServiceImpl implements DbService {
             return Future.succeededFuture(value);
         }
         return CryptoUtil.decrypt(value).recover(e -> {
-            log.warn("decrypt donated account field failed, fallback to plaintext", e);
-            return Future.succeededFuture(value);
+            // value 看起来像密文但无法解密，通常是密钥轮换/不一致导致；
+            // 不应回退为明文，否则会把密文误当 token/cookie 返回给调用方
+            log.warn("decrypt donated account field failed, fallback to null to avoid ciphertext leakage", e);
+            return Future.succeededFuture((String) null);
         });
     }
 

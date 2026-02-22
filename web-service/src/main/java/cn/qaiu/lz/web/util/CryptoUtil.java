@@ -30,10 +30,15 @@ public class CryptoUtil {
             secretKeyFuture = ConfigUtil.readYamlConfig("secret", vertx)
                     .map(config -> {
                         String key = config.getJsonObject("encrypt").getString("key");
-                        if (key == null || key.length() != 32) {
-                            throw new IllegalArgumentException("Invalid AES key length in secret.yml. Key must be 32 bytes.");
+                        if (key != null) {
+                            key = key.trim();
                         }
-                        return new SecretKeySpec(key.getBytes(StandardCharsets.UTF_8), "AES");
+                        byte[] keyBytes = key == null ? null : key.getBytes(StandardCharsets.UTF_8);
+                        if (keyBytes == null || keyBytes.length != 32) {
+                            int currentLen = keyBytes == null ? 0 : keyBytes.length;
+                            throw new IllegalArgumentException("Invalid AES key length in secret.yml. Key must be 32 bytes. current=" + currentLen);
+                        }
+                        return new SecretKeySpec(keyBytes, "AES");
                     })
                     .onFailure(err -> logger.error("Failed to load encryption key from secret.yml", err));
         } else {

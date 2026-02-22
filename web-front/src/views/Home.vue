@@ -361,7 +361,8 @@
         v-model="showDonateDialog"
         title="🎁 捐赠网盘账号"
         width="550px"
-        :close-on-click-modal="false">
+        :close-on-click-modal="false"
+        @open="loadDonateAccountCounts">
       <el-alert type="info" :closable="false" show-icon style="margin-bottom: 15px;">
         <template #title>
           捐赠您的网盘 Cookie/Token，解析时将从所有捐赠账号中随机选择使用，分摊请求压力。

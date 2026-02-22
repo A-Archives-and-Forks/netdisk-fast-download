@@ -28,6 +28,7 @@ import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
@@ -484,12 +485,13 @@ public class ParserApi {
      * 捐赠网盘账号
      */
     @RouteMapping(value = "/donateAccount", method = RouteMethod.POST)
-    public Future<JsonObject> donateAccount(HttpServerRequest request, JsonObject body) {
+    public Future<JsonObject> donateAccount(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
         if (body == null || StringUtils.isBlank(body.getString("panType"))
                 || StringUtils.isBlank(body.getString("authType"))) {
             return Future.succeededFuture(JsonResult.error("panType and authType are required").toJsonObject());
         }
-        String ip = request.remoteAddress().host();
+        String ip = ctx.request().remoteAddress().host();
         body.put("ip", ip);
         return dbService.saveDonatedAccount(body);
     }
