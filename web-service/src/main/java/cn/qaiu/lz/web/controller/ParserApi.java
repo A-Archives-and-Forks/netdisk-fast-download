@@ -513,7 +513,9 @@ public class ParserApi {
             if (Integer.valueOf(200).equals(res.getInteger("code")) && res.getJsonObject("data") != null) {
                 JsonObject data = res.getJsonObject("data");
                 String encryptedAuth = AuthParamCodec.encode(data);
-                data.put("encryptedAuth", encryptedAuth);
+                JsonObject safeData = new JsonObject();
+                safeData.put("encryptedAuth", encryptedAuth);
+                res.put("data", safeData);
             }
             return res;
         });
