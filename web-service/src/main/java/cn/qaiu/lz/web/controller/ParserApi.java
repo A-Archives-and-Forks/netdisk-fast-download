@@ -509,6 +509,13 @@ public class ParserApi {
      */
     @RouteMapping(value = "/randomAuth", method = RouteMethod.GET)
     public Future<JsonObject> getRandomAuth(String panType) {
-        return dbService.getRandomDonatedAccount(panType);
+        return dbService.getRandomDonatedAccount(panType).map(res -> {
+            if (Integer.valueOf(200).equals(res.getInteger("code")) && res.getJsonObject("data") != null) {
+                JsonObject data = res.getJsonObject("data");
+                String encryptedAuth = AuthParamCodec.encode(data);
+                data.put("encryptedAuth", encryptedAuth);
+            }
+            return res;
+        });
     }
 }
