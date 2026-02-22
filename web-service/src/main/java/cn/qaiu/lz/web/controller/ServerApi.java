@@ -5,6 +5,7 @@ import cn.qaiu.lz.common.util.URLParamUtil;
 import cn.qaiu.lz.web.model.AuthParam;
 import cn.qaiu.lz.web.model.CacheLinkInfo;
 import cn.qaiu.lz.web.service.CacheService;
+import cn.qaiu.lz.web.service.DbService;
 import cn.qaiu.vx.core.annotaions.RouteHandler;
 import cn.qaiu.vx.core.annotaions.RouteMapping;
 import cn.qaiu.vx.core.enums.RouteMethod;
@@ -29,6 +30,7 @@ import lombok.extern.slf4j.Slf4j;
 public class ServerApi {
 
     private final CacheService cacheService = AsyncServiceUtil.getAsyncServiceInstance(CacheService.class);
+    private final DbService dbService = AsyncServiceUtil.getAsyncServiceInstance(DbService.class);
 
     @RouteMapping(value = "/parser", method = RouteMethod.GET, order = 1)
     public Future<Void> parse(HttpServerResponse response, HttpServerRequest request, RoutingContext rcx, String pwd, String auth) {
@@ -43,7 +45,10 @@ public class ServerApi {
                         response.putHeader("nfd-cache-hit", res.getCacheHit().toString())
                                 .putHeader("nfd-cache-expires", res.getExpires()),
                                 res.getDirectLink(), promise))
-                .onFailure(t -> promise.fail(t.fillInStackTrace()));
+                .onFailure(t -> {
+                    recordDonatedAccountFailureIfNeeded(otherParam, t);
+                    promise.fail(t.fillInStackTrace());
+                });
         return promise.future();
     }
 
@@ -51,7 +56,8 @@ public class ServerApi {
     public Future<CacheLinkInfo> parseJson(HttpServerRequest request, String pwd, String auth) {
         String url = URLParamUtil.parserParams(request);
         JsonObject otherParam = buildOtherParam(request, auth);
-        return cacheService.getCachedByShareUrlAndPwd(url, pwd, otherParam);
+        return cacheService.getCachedByShareUrlAndPwd(url, pwd, otherParam)
+                .onFailure(t -> recordDonatedAccountFailureIfNeeded(otherParam, t));
     }
 
     @RouteMapping(value = "/json/:type/:key", method = RouteMethod.GET)
@@ -106,10 +112,48 @@ public class ServerApi {
                 otherParam.put("authInfo3", authParam.getExt3());
                 otherParam.put("authInfo4", authParam.getExt4());
                 otherParam.put("authInfo5", authParam.getExt5());
+                if (authParam.getDonatedAccountToken() != null && !authParam.getDonatedAccountToken().isBlank()) {
+                    otherParam.put("donatedAccountToken", authParam.getDonatedAccountToken());
+                }
                 log.debug("已解码认证参数: authType={}", authParam.getAuthType());
             }
         }
 
         return otherParam;
+    }
+
+    private void recordDonatedAccountFailureIfNeeded(JsonObject otherParam, Throwable cause) {
+        if (!isLikelyAuthFailure(cause)) {
+            return;
+        }
+        String donatedAccountToken = otherParam.getString("donatedAccountToken");
+        if (donatedAccountToken == null || donatedAccountToken.isBlank()) {
+            return;
+        }
+        dbService.recordDonatedAccountFailureByToken(donatedAccountToken)
+                .onFailure(e -> log.warn("记录捐赠账号失败次数失败", e));
+    }
+
+    private boolean isLikelyAuthFailure(Throwable cause) {
+        if (cause == null) {
+            return false;
+        }
+        String msg = cause.getMessage();
+        if (msg == null || msg.isBlank()) {
+            return false;
+        }
+        String lower = msg.toLowerCase();
+        return lower.contains("auth")
+                || lower.contains("token")
+                || lower.contains("cookie")
+                || lower.contains("password")
+                || lower.contains("credential")
+                || lower.contains("401")
+                || lower.contains("403")
+                || lower.contains("unauthorized")
+                || lower.contains("forbidden")
+                || lower.contains("expired")
+                || lower.contains("登录")
+                || lower.contains("认证");
     }
 }

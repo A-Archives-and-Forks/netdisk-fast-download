@@ -28,6 +28,7 @@ import io.vertx.core.Promise;
 import io.vertx.core.http.HttpServerRequest;
 import io.vertx.core.http.HttpServerResponse;
 import io.vertx.core.json.JsonObject;
+import io.vertx.ext.web.RoutingContext;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 
@@ -476,5 +477,38 @@ public class ParserApi {
     private String extractClientLinkByType(Map<ClientLinkType, String> clientLinks, String clientType) {
         ClientLinkType type = ClientLinkType.valueOf(clientType.toUpperCase());
         return clientLinks.get(type);
+    }
+
+    // ========== 捐赠账号 API ==========
+
+    /**
+     * 捐赠网盘账号
+     */
+    @RouteMapping(value = "/donateAccount", method = RouteMethod.POST)
+    public Future<JsonObject> donateAccount(RoutingContext ctx) {
+        JsonObject body = ctx.body().asJsonObject();
+        if (body == null || StringUtils.isBlank(body.getString("panType"))
+                || StringUtils.isBlank(body.getString("authType"))) {
+            return Future.succeededFuture(JsonResult.error("panType and authType are required").toJsonObject());
+        }
+        String ip = ctx.request().remoteAddress().host();
+        body.put("ip", ip);
+        return dbService.saveDonatedAccount(body);
+    }
+
+    /**
+     * 获取各网盘捐赠账号数量
+     */
+    @RouteMapping(value = "/donateAccountCounts", method = RouteMethod.GET)
+    public Future<JsonObject> getDonateAccountCounts() {
+        return dbService.getDonatedAccountCounts();
+    }
+
+    /**
+     * 随机获取指定网盘类型的捐赠账号（内部使用，返回加密后的 auth 参数）
+     */
+    @RouteMapping(value = "/randomAuth", method = RouteMethod.GET)
+    public Future<JsonObject> getRandomAuth(String panType) {
+        return dbService.getRandomDonatedAccount(panType);
     }
 }

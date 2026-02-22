@@ -2,8 +2,9 @@ package cn.qaiu.lz.web.service.impl;
 
 import cn.qaiu.db.pool.JDBCPoolInit;
 import cn.qaiu.lz.common.model.UserInfo;
-import cn.qaiu.lz.web.service.DbService;
 import cn.qaiu.lz.web.model.StatisticsInfo;
+import cn.qaiu.lz.web.service.DbService;
+import cn.qaiu.lz.web.util.CryptoUtil;
 import cn.qaiu.vx.core.annotaions.Service;
 import cn.qaiu.vx.core.model.JsonResult;
 import io.vertx.core.Future;
@@ -14,8 +15,13 @@ import io.vertx.sqlclient.Row;
 import io.vertx.sqlclient.Tuple;
 import io.vertx.sqlclient.templates.SqlTemplate;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 
@@ -28,6 +34,11 @@ import java.util.List;
 @Slf4j
 @Service
 public class DbServiceImpl implements DbService {
+    private static final int DONATED_ACCOUNT_DISABLE_THRESHOLD = 3;
+    private static final long FAILURE_TOKEN_TTL_MILLIS = 10 * 60 * 1000L;
+    private static final String HMAC_ALGORITHM = "HmacSHA256";
+    private static final String DONATED_ACCOUNT_TOKEN_SIGN_KEY_CONFIG = "donatedAccountFailureTokenSignKey";
+    private static final String DONATED_ACCOUNT_TOKEN_SIGN_KEY_FALLBACK = "nfd_donate_fail_token_sign_2026";
     @Override
     public Future<JsonObject> sayOk(String data) {
         log.info("say ok1 -> wait...");
@@ -265,4 +276,249 @@ public class DbServiceImpl implements DbService {
 
         return promise.future();
     }
+
+    // ========== 捐赠账号相关 ==========
+
+    @Override
+    public Future<JsonObject> saveDonatedAccount(JsonObject account) {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+
+        Future<String> encryptedUsername = CryptoUtil.encrypt(account.getString("username"));
+        Future<String> encryptedPassword = CryptoUtil.encrypt(account.getString("password"));
+        Future<String> encryptedToken = CryptoUtil.encrypt(account.getString("token"));
+
+        return ensureFailCountColumn(client).compose(v ->
+                Future.all(encryptedUsername, encryptedPassword, encryptedToken).compose(compositeFuture -> {
+                    String sql = """
+                        INSERT INTO donated_account
+                        (pan_type, auth_type, username, password, token, remark, ip, enabled, fail_count, create_time)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, true, 0, NOW())
+                        """;
+
+                    return client.preparedQuery(sql)
+                            .execute(Tuple.of(
+                                    account.getString("panType"),
+                                    account.getString("authType"),
+                                    encryptedUsername.result(),
+                                    encryptedPassword.result(),
+                                    encryptedToken.result(),
+                                    account.getString("remark"),
+                                    account.getString("ip")
+                            ))
+                            .map(res -> JsonResult.success("捐赠成功").toJsonObject())
+                            .onFailure(e -> log.error("saveDonatedAccount failed", e));
+                }));
+    }
+
+    @Override
+    public Future<JsonObject> getDonatedAccountCounts() {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+
+        String sql = "SELECT pan_type, enabled, COUNT(*) as count FROM donated_account GROUP BY pan_type, enabled";
+
+        return client.query(sql).execute().map(rows -> {
+            JsonObject result = new JsonObject();
+            JsonObject activeCounts = new JsonObject();
+            JsonObject inactiveCounts = new JsonObject();
+            int totalActive = 0;
+            int totalInactive = 0;
+
+            for (Row row : rows) {
+                String panType = row.getString("pan_type");
+                boolean enabled = row.getBoolean("enabled");
+                int count = row.getInteger("count");
+
+                if (enabled) {
+                    activeCounts.put(panType, count);
+                    totalActive += count;
+                } else {
+                    inactiveCounts.put(panType, count);
+                    totalInactive += count;
+                }
+            }
+
+            activeCounts.put("total", totalActive);
+            inactiveCounts.put("total", totalInactive);
+
+            result.put("active", activeCounts);
+            result.put("inactive", inactiveCounts);
+
+            return JsonResult.data(result).toJsonObject();
+        }).onFailure(e -> log.error("getDonatedAccountCounts failed", e));
+    }
+
+    @Override
+    public Future<JsonObject> getRandomDonatedAccount(String panType) {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+
+        String sql = "SELECT * FROM donated_account WHERE pan_type = ? AND enabled = true ORDER BY RAND() LIMIT 1";
+
+        return client.preparedQuery(sql)
+                .execute(Tuple.of(panType))
+                .compose(rows -> {
+                    if (rows.size() > 0) {
+                        Row row = rows.iterator().next();
+
+                        Future<String> usernameFuture = decryptOrPlain(row.getString("username"));
+                        Future<String> passwordFuture = decryptOrPlain(row.getString("password"));
+                        Future<String> tokenFuture = decryptOrPlain(row.getString("token"));
+                        Future<String> failureTokenFuture = issueDonatedAccountFailureToken(row.getLong("id"));
+
+                        return Future.all(usernameFuture, passwordFuture, tokenFuture, failureTokenFuture)
+                                .map(compositeFuture -> {
+                                    String username = usernameFuture.result();
+                                    String password = passwordFuture.result();
+                                    String token = tokenFuture.result();
+
+                                    // 如果解密后没有任何可用凭证，返回空对象，避免把密文当作明文认证参数下发给前端
+                                    if (StringUtils.isBlank(username) && StringUtils.isBlank(password) && StringUtils.isBlank(token)) {
+                                        log.warn("random donated account has no usable credential after decrypt, accountId={}", row.getLong("id"));
+                                        return JsonResult.data(new JsonObject()).toJsonObject();
+                                    }
+
+                                    JsonObject account = new JsonObject();
+                                    account.put("authType", row.getString("auth_type"));
+                                    account.put("username", username);
+                                    account.put("password", password);
+                                    account.put("token", token);
+                                    account.put("donatedAccountToken", failureTokenFuture.result());
+                                    return JsonResult.data(account).toJsonObject();
+                                });
+                    } else {
+                        return Future.succeededFuture(JsonResult.data(new JsonObject()).toJsonObject());
+                    }
+                })
+                .onFailure(e -> log.error("getRandomDonatedAccount failed", e));
+    }
+
+    @Override
+    public Future<String> issueDonatedAccountFailureToken(Long accountId) {
+        if (accountId == null) {
+            return Future.failedFuture("accountId is null");
+        }
+        try {
+            long issuedAt = System.currentTimeMillis();
+            String payload = accountId + ":" + issuedAt;
+            String signature = hmacSha256(payload);
+            String token = Base64.getUrlEncoder().withoutPadding().encodeToString(payload.getBytes(StandardCharsets.UTF_8))
+                    + "."
+                    + Base64.getUrlEncoder().withoutPadding().encodeToString(signature.getBytes(StandardCharsets.UTF_8));
+            return Future.succeededFuture(token);
+        } catch (Exception e) {
+            return Future.failedFuture(e);
+        }
+    }
+
+    @Override
+    public Future<Void> recordDonatedAccountFailureByToken(String failureToken) {
+        JDBCPool client = JDBCPoolInit.instance().getPool();
+
+        Long accountId;
+        try {
+            accountId = parseAndVerifyFailureToken(failureToken);
+        } catch (Exception e) {
+            return Future.failedFuture(e);
+        }
+
+        String updateSql = """
+                UPDATE donated_account
+                SET fail_count = fail_count + 1,
+                    enabled = CASE
+                        WHEN fail_count + 1 >= ? THEN false
+                        ELSE enabled
+                    END
+                WHERE id = ?
+                """;
+
+        return ensureFailCountColumn(client)
+                .compose(v -> client.preparedQuery(updateSql)
+                        .execute(Tuple.of(DONATED_ACCOUNT_DISABLE_THRESHOLD, accountId)))
+                .map(rows -> (Void) null)
+                .onFailure(e -> log.error("recordDonatedAccountFailureByToken failed", e));
+    }
+
+    private Future<Void> ensureFailCountColumn(JDBCPool client) {
+        Promise<Void> promise = Promise.promise();
+        String sql = "ALTER TABLE donated_account ADD COLUMN IF NOT EXISTS fail_count INT DEFAULT 0 NOT NULL";
+        client.query(sql).execute()
+                .onSuccess(res -> promise.complete())
+                .onFailure(e -> {
+                    String msg = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+                    if (!(msg.contains("duplicate") || msg.contains("exists") || msg.contains("already"))) {
+                        log.warn("ensure fail_count column failed, continue without schema migration", e);
+                    }
+                    promise.complete();
+                });
+        return promise.future();
+    }
+
+    private Future<String> decryptOrPlain(String value) {
+        if (value == null) {
+            return Future.succeededFuture(null);
+        }
+        if (!isLikelyEncrypted(value)) {
+            return Future.succeededFuture(value);
+        }
+        return CryptoUtil.decrypt(value).recover(e -> {
+            // value 看起来像密文但无法解密，通常是密钥轮换/不一致导致；
+            // 不应回退为明文，否则会把密文误当 token/cookie 返回给调用方
+            log.warn("decrypt donated account field failed, fallback to null to avoid ciphertext leakage", e);
+            return Future.succeededFuture((String) null);
+        });
+    }
+
+    private boolean isLikelyEncrypted(String value) {
+        try {
+            byte[] decoded = Base64.getDecoder().decode(value);
+            return decoded.length > 16;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Long parseAndVerifyFailureToken(String token) throws Exception {
+        if (token == null || token.isBlank() || !token.contains(".")) {
+            throw new IllegalArgumentException("invalid donated account token");
+        }
+        String[] parts = token.split("\\.", 2);
+        String payload = new String(Base64.getUrlDecoder().decode(parts[0]), StandardCharsets.UTF_8);
+        String signature = new String(Base64.getUrlDecoder().decode(parts[1]), StandardCharsets.UTF_8);
+        String expected = hmacSha256(payload);
+        if (!expected.equals(signature)) {
+            throw new IllegalArgumentException("donated account token signature invalid");
+        }
+
+        String[] payloadParts = payload.split(":", 2);
+        if (payloadParts.length != 2) {
+            throw new IllegalArgumentException("invalid donated account token payload");
+        }
+        Long accountId = Long.parseLong(payloadParts[0]);
+        long issuedAt = Long.parseLong(payloadParts[1]);
+        if (System.currentTimeMillis() - issuedAt > FAILURE_TOKEN_TTL_MILLIS) {
+            throw new IllegalArgumentException("donated account token expired");
+        }
+        return accountId;
+    }
+
+    private String hmacSha256(String payload) throws Exception {
+        String secret = getDonatedAccountFailureTokenSignKey();
+        Mac mac = Mac.getInstance(HMAC_ALGORITHM);
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
+        byte[] digest = mac.doFinal(payload.getBytes(StandardCharsets.UTF_8));
+        return Base64.getEncoder().encodeToString(digest);
+    }
+
+    private String getDonatedAccountFailureTokenSignKey() {
+        try {
+            String configKey = cn.qaiu.vx.core.util.SharedDataUtil
+                    .getJsonStringForServerConfig(DONATED_ACCOUNT_TOKEN_SIGN_KEY_CONFIG);
+            if (StringUtils.isNotBlank(configKey)) {
+                return configKey;
+            }
+        } catch (Exception e) {
+            log.debug("读取捐赠账号失败计数签名密钥失败，使用默认值: {}", e.getMessage());
+        }
+        return DONATED_ACCOUNT_TOKEN_SIGN_KEY_FALLBACK;
+    }
 }
+

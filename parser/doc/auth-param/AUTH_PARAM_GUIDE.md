@@ -36,6 +36,22 @@ URL解码 → Base64解码 → AES解密 → JSON对象
 - **密钥长度**: 16位（128位）
 - **默认密钥**: `nfd_auth_key2026`（可在 `app-dev.yml` 中通过 `server.authEncryptKey` 配置）
 
+### 密钥作用说明（重要）
+
+当前系统中涉及两类不同用途的密钥：
+
+1. `server.authEncryptKey`
+   - 用途：加解密 `auth` 参数（前端/调用方传入的认证信息）
+   - 影响范围：`/parser`、`/json/parser`、`/v2/linkInfo` 等接口中的 `auth` 参数
+   - 注意：这是 **AES 对称加密密钥**，要求 16 位
+
+2. `server.donatedAccountFailureTokenSignKey`
+   - 用途：签名和验签“捐赠账号失败计数 token”（用于防伪造、失败计数）
+   - 影响范围：捐赠账号失败计数与自动失效逻辑
+   - 注意：这是 **HMAC 签名密钥**，与 `authEncryptKey` 已解耦，建议使用高强度随机字符串
+
+> 建议：生产环境务必同时自定义这两个密钥，且不要设置为相同值。
+
 ## JSON 模型定义
 
 ### AuthParam 对象
@@ -301,13 +317,24 @@ if (auths != null) {
 
 ## 配置说明
 
-在 `app-dev.yml` 中配置加密密钥：
+在 `app-dev.yml` 中配置密钥：
 
 ```yaml
 server:
   # auth参数加密密钥（16位AES密钥）
   authEncryptKey: 'your_custom_key16'
+
+  # 捐赠账号失败计数token签名密钥（HMAC）
+  # 建议使用较长随机字符串，并与 authEncryptKey 不同
+  donatedAccountFailureTokenSignKey: 'your_random_hmac_sign_key'
 ```
+
+### 密钥管理建议
+
+- 不要在公开仓库提交生产密钥
+- 建议通过环境变量或私有配置注入
+- 调整 `authEncryptKey` 会影响 `auth` 参数兼容性
+- 调整 `donatedAccountFailureTokenSignKey` 会使已签发的失败计数 token 失效（短期可接受）
 
 ## 更新日志
 

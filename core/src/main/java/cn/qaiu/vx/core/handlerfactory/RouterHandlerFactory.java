@@ -318,6 +318,7 @@ public class RouterHandlerFactory implements BaseHttpApi {
         // 只处理POST/PUT/PATCH等有body的请求方法，避免GET请求读取body导致"Request has already been read"错误
         String httpMethod = ctx.request().method().name();
         if (("POST".equals(httpMethod) || "PUT".equals(httpMethod) || "PATCH".equals(httpMethod))
+                && ctx.parsedHeaders() != null && ctx.parsedHeaders().contentType() != null
                 && HttpHeaderValues.APPLICATION_JSON.toString().equals(ctx.parsedHeaders().contentType().value())
                 && ctx.body() != null && ctx.body().asJsonObject() != null) {
             JsonObject body = ctx.body().asJsonObject();
@@ -340,8 +341,12 @@ public class RouterHandlerFactory implements BaseHttpApi {
                 });
             }
         } else if (("POST".equals(httpMethod) || "PUT".equals(httpMethod) || "PATCH".equals(httpMethod))
-                && ctx.body() != null) {
-            queryParams.addAll(ParamUtil.paramsToMap(ctx.body().asString()));
+                && ctx.body() != null && ctx.body().length() > 0) {
+            try {
+                queryParams.addAll(ParamUtil.paramsToMap(ctx.body().asString()));
+            } catch (Exception e) {
+                LOGGER.debug("Failed to parse body as params: {}", e.getMessage());
+            }
         }
 
         // 解析其他参数
@@ -360,6 +365,12 @@ public class RouterHandlerFactory implements BaseHttpApi {
                 parameterValueList.put(k, ctx.request());
             } else if (HttpServerResponse.class.getName().equals(v.getRight().getName())) {
                 parameterValueList.put(k, ctx.response());
+            } else if (JsonObject.class.getName().equals(v.getRight().getName())) {
+                if (ctx.body() != null && ctx.body().asJsonObject() != null) {
+                    parameterValueList.put(k, ctx.body().asJsonObject());
+                } else {
+                    parameterValueList.put(k, new JsonObject());
+                }
             } else if (parameterValueList.get(k) == null
                     && CommonUtil.matchRegList(entityPackagesReg.getList(), v.getRight().getName())) {
                 // 绑定实体类
@@ -374,6 +385,17 @@ public class RouterHandlerFactory implements BaseHttpApi {
         });
         // 调用handle 获取响应对象
         Object[] parameterValueArray = parameterValueList.values().toArray(new Object[0]);
+        
+        // 打印调试信息，确认参数注入的情况
+        if (LOGGER.isDebugEnabled() && method.getName().equals("donateAccount")) {
+            LOGGER.debug("donateAccount parameter list:");
+            int i = 0;
+            for (Map.Entry<String, Object> entry : parameterValueList.entrySet()) {
+                LOGGER.debug("Param [{}]: {} = {}", i++, entry.getKey(),
+                        entry.getValue() != null ? entry.getValue().toString() : "null");
+            }
+        }
+        
         try {
             // 反射调用
             Object data = ReflectionUtil.invokeWithArguments(method, instance, parameterValueArray);
