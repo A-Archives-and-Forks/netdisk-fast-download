@@ -369,16 +369,34 @@
       </el-alert>
       
       <!-- 已捐赠账号数量统计 -->
-      <div v-if="donateAccountCounts.total > 0" style="margin-bottom: 16px;">
-        <el-divider content-position="left">当前账号池（共 {{ donateAccountCounts.total }} 个）</el-divider>
-        <el-tag 
-          v-for="(count, panType) in donateAccountCounts" 
-          :key="panType"
-          v-show="panType !== 'total'"
-          type="success"
-          style="margin-right: 6px; margin-bottom: 4px;">
-          {{ getPanDisplayName(panType) }}: {{ count }} 个
-        </el-tag>
+      <div v-if="donateAccountCounts.active.total + donateAccountCounts.inactive.total > 0" style="margin-bottom: 16px;">
+        <el-divider content-position="left">
+          当前账号池（活跃 {{ donateAccountCounts.active.total }} / 失效 {{ donateAccountCounts.inactive.total }}）
+        </el-divider>
+
+        <div style="margin-bottom: 8px;">
+          <el-tag type="success" style="margin-right: 8px;">活跃账号</el-tag>
+          <el-tag
+            v-for="(count, panType) in donateAccountCounts.active"
+            :key="`active-${panType}`"
+            v-show="panType !== 'total'"
+            type="success"
+            style="margin-right: 6px; margin-bottom: 4px;">
+            {{ getPanDisplayName(panType) }}: {{ count }} 个
+          </el-tag>
+        </div>
+
+        <div>
+          <el-tag type="danger" style="margin-right: 8px;">失效账号</el-tag>
+          <el-tag
+            v-for="(count, panType) in donateAccountCounts.inactive"
+            :key="`inactive-${panType}`"
+            v-show="panType !== 'total'"
+            type="danger"
+            style="margin-right: 6px; margin-bottom: 4px;">
+            {{ getPanDisplayName(panType) }}: {{ count }} 个
+          </el-tag>
+        </div>
       </div>
       <div v-else style="margin-bottom: 16px; text-align: center; color: #999;">
         暂无捐赠账号，成为第一个捐赠者吧！
@@ -530,8 +548,11 @@ export default {
         token: '',
         remark: ''
       },
-      // 捐赠账号数量统计 { panType: count, total: N }
-      donateAccountCounts: { total: 0 }
+      // 捐赠账号数量统计
+      donateAccountCounts: {
+        active: { total: 0 },
+        inactive: { total: 0 }
+      }
     }
   },
   computed: {
@@ -804,7 +825,8 @@ export default {
       if (config.ext3) authObj.ext3 = config.ext3
       if (config.ext4) authObj.ext4 = config.ext4
       if (config.ext5) authObj.ext5 = config.ext5
-      
+      if (config.donatedAccountToken) authObj.donatedAccountToken = config.donatedAccountToken
+
       // AES 加密 + Base64 + URL 编码
       try {
         const jsonStr = JSON.stringify(authObj)
@@ -1310,21 +1332,39 @@ export default {
     async loadDonateAccountCounts() {
       try {
         const response = await axios.get(`${this.baseAPI}/v2/donateAccountCounts`)
-        // 解包可能的 JsonResult 嵌套: { code, data: { code, data: { QK: 3, total: 4 } } }
+        // 解包可能的 JsonResult 嵌套
         let data = response.data
         while (data && data.data !== undefined && data.code !== undefined) {
           data = data.data
         }
+
         if (data && typeof data === 'object') {
-          // 确保有 total 字段
-          if (data.total === undefined) {
-            let total = 0
-            for (const [key, val] of Object.entries(data)) {
-              if (typeof val === 'number') total += val
+          // 兼容新结构: { active: {...}, inactive: {...} }
+          if (data.active && data.inactive) {
+            if (data.active.total === undefined) {
+              data.active.total = Object.entries(data.active)
+                .filter(([k, v]) => k !== 'total' && typeof v === 'number')
+                .reduce((s, [, v]) => s + v, 0)
             }
-            data.total = total
+            if (data.inactive.total === undefined) {
+              data.inactive.total = Object.entries(data.inactive)
+                .filter(([k, v]) => k !== 'total' && typeof v === 'number')
+                .reduce((s, [, v]) => s + v, 0)
+            }
+            this.donateAccountCounts = data
+          } else {
+            // 兼容旧结构: { QK: 3, total: 4 }
+            const active = { ...data }
+            if (active.total === undefined) {
+              active.total = Object.entries(active)
+                .filter(([k, v]) => k !== 'total' && typeof v === 'number')
+                .reduce((s, [, v]) => s + v, 0)
+            }
+            this.donateAccountCounts = {
+              active,
+              inactive: { total: 0 }
+            }
           }
-          this.donateAccountCounts = data
         }
       } catch (e) {
         console.error('加载捐赠账号统计失败:', e)

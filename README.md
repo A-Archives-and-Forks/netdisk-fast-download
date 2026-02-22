@@ -179,6 +179,18 @@ GET /parser?url={分享链接}&pwd={密码}&auth={加密后的认证参数}
 
 > 💡 提示：Web 界面已内置认证配置功能，可自动处理加密过程，无需手动构造参数。
 > [可以使用在线认证参数加密](https://qaiu.top/nfd-auth.html)
+
+#### 密钥作用说明
+
+- `server.authEncryptKey`
+  - 作用：用于 `auth` 参数的 AES 加解密
+  - 要求：16位（AES-128）
+
+- `server.donatedAccountFailureTokenSignKey`
+  - 作用：用于“捐赠账号失败计数 token”的 HMAC 签名/验签
+  - 目的：防止客户端伪造失败计数请求
+  - 建议：使用高强度随机字符串，且不要与 `authEncryptKey` 相同
+
 ### 特殊说明
 
 - 移动云云空间的 `分享key` 取分享链接中的 `data` 参数值

@@ -94,6 +94,11 @@ public class AuthParam implements ToJson {
     private String ext5;
 
     /**
+     * 捐赠账号失败计数令牌（服务端签发，不可伪造）
+     */
+    private String donatedAccountToken;
+
+    /**
      * 从 JsonObject 构造
      */
     public AuthParam(JsonObject json) {
@@ -111,6 +116,7 @@ public class AuthParam implements ToJson {
         this.ext3 = json.getString("ext3");
         this.ext4 = json.getString("ext4");
         this.ext5 = json.getString("ext5");
+        this.donatedAccountToken = json.getString("donatedAccountToken");
     }
 
     /**
@@ -129,6 +135,7 @@ public class AuthParam implements ToJson {
         if (ext3 != null) json.put("ext3", ext3);
         if (ext4 != null) json.put("ext4", ext4);
         if (ext5 != null) json.put("ext5", ext5);
+        if (donatedAccountToken != null) json.put("donatedAccountToken", donatedAccountToken);
         return json;
     }
 

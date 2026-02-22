@@ -67,4 +67,13 @@ public interface DbService extends BaseAsyncService {
      */
     Future<JsonObject> getRandomDonatedAccount(String panType);
 
+    /**
+     * 签发捐赠账号失败计数令牌（服务端临时令牌）
+     */
+    Future<String> issueDonatedAccountFailureToken(Long accountId);
+
+    /**
+     * 使用服务端失败计数令牌记录捐赠账号解析失败
+     */
+    Future<Void> recordDonatedAccountFailureByToken(String failureToken);
 }

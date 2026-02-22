@@ -47,6 +47,9 @@ public class DonatedAccount {
     @Constraint(notNull = true, defaultValue = "true")
     private Boolean enabled = true; // 是否启用
 
+    @Constraint(notNull = true, defaultValue = "0")
+    private Integer failCount = 0; // 失败次数，达到阈值自动禁用
+
     @JsonFormat(pattern = "yyyy-MM-dd HH:mm:ss", timezone = "GMT+8")
     private Date createTime = new Date();
 }
