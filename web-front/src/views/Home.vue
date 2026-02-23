@@ -64,7 +64,7 @@
         </div>
         <!-- 项目简介移到卡片内 -->
         <div class="project-intro">
-          <div class="intro-title">NFD网盘直链解析0.2.1b2</div>
+          <div class="intro-title">NFD网盘直链解析0.2.1b3</div>
           <div class="intro-desc">
             <div>支持网盘：蓝奏云、蓝奏云优享、小飞机盘、123云盘、奶牛快传、移动云空间、QQ邮箱云盘、QQ闪传等 <el-link style="color:#606cf5" href="https://github.com/qaiu/netdisk-fast-download?tab=readme-ov-file#%E7%BD%91%E7%9B%98%E6%94%AF%E6%8C%81%E6%83%85%E5%86%B5" target="_blank"> &gt;&gt; </el-link></div>
             <div>文件夹解析支持：蓝奏云、蓝奏云优享、小飞机盘、123云盘</div>
@@ -794,26 +794,21 @@ export default {
         config = this.allAuthConfigs[panType]
         console.log(`[认证] 使用个人配置: ${this.getPanDisplayName(panType)}`)
       } else {
-        // 从后端随机获取捐赠账号
+        // 从后端随机获取捐赠账号（后端已加密，直接使用 encryptedAuth）
         try {
           const response = await axios.get(`${this.baseAPI}/v2/randomAuth`, { params: { panType } })
-          // 解包 JsonResult 嵌套
-          let data = response.data
-          while (data && data.data !== undefined && data.code !== undefined) {
-            data = data.data
-          }
-          if (data && (data.token || data.username)) {
-            config = data
+          const encryptedAuth = response.data?.data?.encryptedAuth
+          if (encryptedAuth) {
             console.log(`[认证] 使用捐赠账号: ${this.getPanDisplayName(panType)}`)
+            return encryptedAuth
           }
         } catch (e) {
           console.log(`[认证] 无可用捐赠账号: ${this.getPanDisplayName(panType)}`)
         }
+        return ''
       }
       
-      if (!config) return ''
-      
-      // 构建 JSON 对象
+      // 个人配置：本地 AES 加密
       const authObj = {}
       if (config.authType) authObj.authType = config.authType
       if (config.username) authObj.username = config.username
@@ -826,12 +821,9 @@ export default {
       if (config.ext3) authObj.ext3 = config.ext3
       if (config.ext4) authObj.ext4 = config.ext4
       if (config.ext5) authObj.ext5 = config.ext5
-      if (config.donatedAccountToken) authObj.donatedAccountToken = config.donatedAccountToken
 
-      // AES 加密 + Base64 + URL 编码
       try {
-        const jsonStr = JSON.stringify(authObj)
-        const encrypted = this.aesEncrypt(jsonStr, 'nfd_auth_key2026')
+        const encrypted = this.aesEncrypt(JSON.stringify(authObj), 'nfd_auth_key2026')
         return encodeURIComponent(encrypted)
       } catch (e) {
         console.error('生成认证参数失败:', e)
